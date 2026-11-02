@@ -1,0 +1,15 @@
+# Chargeback / dispute exports contain customer emails and names — never commit.
+# Keep them on the Pi or in SharePoint and pass them via --chargeback-file.
+AllDisputeCases_*.CSV
+AllDisputeCases_*.csv
+Disputes_Export_*.csv
+*_signals*.csv
+*_logins*.csv
+# Report outputs
+*_FraudRiskReport.xlsx
+reports/
+# Secrets / local
+.env
+__pycache__/
+*.pyc
+.DS_Store
