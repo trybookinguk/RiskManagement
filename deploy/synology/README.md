@@ -28,8 +28,8 @@ cd /volume1/docker/s3reporting/deploy/synology && sudo ./deploy_synology.sh
 container with the `/risk` mount. Both come from s3reporting's `docker-compose.yml`
 and `Dockerfile`.
 
-If the repos are private, the NAS needs GitHub credentials to clone and pull
-them, for example a fine-grained read-only token.
+RiskManagement is **private**, so the NAS needs a read-only **deploy key** to
+clone and pull it. See "Private repo access" below.
 
 ## Running it
 
@@ -80,3 +80,57 @@ If the Pi still builds the warehouse, the NAS copy goes stale. Don't point
 `WAREHOUSE_DB` at the Pi's file over a network share: the tool writes its
 `chargebacks` and `risk_fraud` tables to it, and SQLite writes over SMB or NFS
 can corrupt the file. Run the pipeline on one host only.
+
+## Private repo access (deploy key)
+
+A deploy key is an SSH key that can read **only this repo** and nothing else
+on GitHub. It belongs to the repo, not to a person, so it doesn't break when
+someone leaves or a token expires. Run these steps once, over SSH on the NAS,
+as root:
+
+```bash
+sudo -i
+```
+
+**1. Create the key** (no passphrase, so scheduled tasks can use it):
+```bash
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+ssh-keygen -t ed25519 -N "" -C "nas-riskmanagement" -f /root/.ssh/riskmanagement_deploy
+cat /root/.ssh/riskmanagement_deploy.pub
+```
+
+**2. Add it on GitHub.** Go to RiskManagement → Settings → Deploy keys → Add
+deploy key. Paste the `.pub` line, give it the title `Synology NAS`, and leave
+**Allow write access unticked**.
+
+**3. Point git at the key.** If outbound port 22 is blocked, use
+`HostName ssh.github.com` and `Port 443` instead.
+```bash
+cat >> /root/.ssh/config <<'CFG'
+Host github-riskmanagement
+    HostName github.com
+    User git
+    IdentityFile /root/.ssh/riskmanagement_deploy
+    IdentitiesOnly yes
+CFG
+chmod 600 /root/.ssh/config
+ssh -T github-riskmanagement     # expect: "Hi trybookinguk/RiskManagement! You've successfully authenticated…"
+```
+
+**4. Clone with the alias**, or repoint an existing clone:
+```bash
+git clone github-riskmanagement:trybookinguk/RiskManagement.git /volume1/docker/RiskManagement
+# existing clone:
+git -C /volume1/docker/RiskManagement remote set-url origin github-riskmanagement:trybookinguk/RiskManagement.git
+git -C /volume1/docker/RiskManagement pull origin main
+```
+
+**Notes**
+- No `git` on the NAS? Install the **Git Server** package from Package Center.
+  It provides the `git` command.
+- DSM Task Scheduler tasks that run as `root` use `/root/.ssh` too, so a
+  scheduled `git pull` works.
+- If s3reporting is also private, give it its **own** deploy key (GitHub
+  doesn't allow one key on two repos). Add a second `Host github-s3reporting`
+  block pointing at that key. The Pi needs the same setup for s3reporting.
+- To revoke the NAS's access, delete the key under Deploy keys.
