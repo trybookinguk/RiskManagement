@@ -26,29 +26,26 @@ The tool doesn't keep its own copy of the data pipeline. It uses these from
 
 `fraud/__init__.py` finds the s3reporting checkout. It checks, in order:
 1. `$S3REPORTING_DIR`
-2. `../s3reporting` next to this repo
-3. `/root/s3reporting`
+2. `/app`, the s3reporting container on the NAS
+3. `../s3reporting` next to this repo
+4. `/root/s3reporting`
 
 S3 tooling also stays in s3reporting:
 - `warehouse_backfill.py`: the one-off column refill.
 - `s3_inventory.py`: which S3 columns exist.
 
-## On the Pi
+## On the Synology NAS
+
+It runs inside the s3reporting Docker container, with this repo mounted at
+`/risk`. Setup, dispute-file location and scheduling are in
+[deploy/synology/README.md](deploy/synology/README.md).
 
 ```bash
-cd /root && git clone https://github.com/trybookinguk/RiskManagement.git
+sudo docker exec -w /risk s3reporting python3 fraud_risk_report.py
 ```
 
-```bash
-set -a && source /root/s3reporting/.env && set +a
-cd /root/RiskManagement && python3 fraud_risk_report.py
-```
-
-Pull both repos before a run:
-
-```bash
-git -C /root/s3reporting pull origin main && git -C /root/RiskManagement pull origin main
-```
+Outside the container, for example on the Pi, it also works with any
+s3reporting checkout found as above. Source `.env` first.
 
 **Never commit dispute exports, signals or login files.** They contain customer
 emails and names. `.gitignore` blocks the usual file names.

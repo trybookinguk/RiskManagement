@@ -8,7 +8,7 @@ in docs/fraud_risk_report.md.
 
 Lives in trybookinguk/RiskManagement and uses the shared warehouse, email,
 SharePoint and S3 code from an s3reporting checkout (see fraud/__init__.py:
-$S3REPORTING_DIR, ../s3reporting, or /root/s3reporting).
+$S3REPORTING_DIR, /app in the NAS container, ../s3reporting, or /root/s3reporting).
 
 Steps
 -----
@@ -32,16 +32,16 @@ Steps
 6. <date>_FraudRiskReport.xlsx is written to REPORTS_DIR and emailed to
    henry@trybooking.co.uk (auto-CCs Kathryn).
 
-Usage (source .env first for AWS + Azure email credentials):
-    set -a && source /root/s3reporting/.env && set +a
-    cd /root/RiskManagement
+Usage on the Synology NAS (inside the s3reporting container, which has .env
+loaded; see deploy/synology/README.md). Prefix each line below with
+`sudo docker exec -w /risk s3reporting`:
     python3 fraud_risk_report.py \\
-        --chargeback-file AllDisputeCases_20231102000000_20261031235959_O_01.CSV \\
-        --chargeback-file Disputes_Export_Query_2014-07-31_to_2026-11-01.csv
+        --chargeback-file /data/disputes/AllDisputeCases_20231102000000_20261031235959_O_01.CSV \\
+        --chargeback-file /data/disputes/Disputes_Export_Query_2014-07-31_to_2026-11-01.csv
     python3 fraud_risk_report.py                       # re-score with existing chargebacks
     python3 fraud_risk_report.py --load-only --chargeback-file new_disputes.csv
     python3 fraud_risk_report.py --risk-report-file 202611-RiskReport-TBUK.csv --no-email
-    TEST_MODE=true python3 fraud_risk_report.py        # [TEST] subject, safe dry run
+    (docker exec -e TEST_MODE=true ...) python3 fraud_risk_report.py   # [TEST] subject
 """
 import argparse
 import io

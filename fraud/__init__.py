@@ -7,14 +7,17 @@ s3reporting checkout on ``sys.path`` so ``from modules ...`` resolves there.
 
 Where s3reporting is looked for, first match wins:
   1. $S3REPORTING_DIR
-  2. a sibling checkout: ../s3reporting next to this repo
-  3. /root/s3reporting (the Pi)
+  2. /app, the s3reporting container on the Synology NAS (this repo is
+     mounted at /risk; see deploy/synology/README.md)
+  3. a sibling checkout: ../s3reporting next to this repo
+  4. /root/s3reporting (the Pi)
 """
 import os
 import sys
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CANDIDATES = [os.environ.get("S3REPORTING_DIR"),
+               "/app",
                os.path.join(os.path.dirname(_HERE), "s3reporting"),
                "/root/s3reporting"]
 
@@ -34,3 +37,9 @@ if S3REPORTING_DIR and S3REPORTING_DIR not in sys.path:
     # the same warehouse, S3 cache and reports folder.
     os.environ.setdefault("S3_CACHE_DIR", os.path.join(S3REPORTING_DIR, ".cache"))
     os.environ.setdefault("REPORTS_DIR", os.path.join(S3REPORTING_DIR, "reports"))
+
+# modules.tier_state defaults to the Pi path /root/s3reporting/.cache/prepared;
+# in the NAS container the tier snapshot sits next to the warehouse in
+# $DATA_DIR (/data/.cache/prepared). On the Pi both resolve to the same file.
+if not os.environ.get("TIER_STATE_DB") and os.environ.get("DATA_DIR"):
+    os.environ["TIER_STATE_DB"] = os.path.join(os.environ["DATA_DIR"], "tier_state.db")

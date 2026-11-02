@@ -198,19 +198,18 @@ Worked example: an event fails *Outside UK* at 40% (2× its threshold of 20, so 
 ## 7. Running it
 
 ```bash
-# The tool lives in /root/RiskManagement and reuses /root/s3reporting
-# (warehouse, email, SharePoint, S3). Keep both pulled. Override the
-# s3reporting location with S3REPORTING_DIR if it ever moves.
-set -a && source /root/s3reporting/.env && set +a
-cd /root/RiskManagement
+# Runs on the Synology NAS inside the s3reporting container: this repo is at
+# /risk, s3reporting at /app, data at /data (see deploy/synology/README.md).
+# Prefix each command below with:  sudo docker exec -w /risk s3reporting
+# Dispute exports go in /volume1/docker/s3reporting-data/disputes (= /data/disputes).
 
 # One-off, after deploying the BookingUrlId fix (outside 02:00-03:30), from s3reporting
-(cd /root/s3reporting && python3 warehouse_backfill.py)
+sudo docker exec -w /app s3reporting python3 warehouse_backfill.py
 
 # Load new dispute exports and send the report
 python3 fraud_risk_report.py \
-  --chargeback-file AllDisputeCases_20231102000000_20261031235959_O_01.CSV \
-  --chargeback-file Disputes_Export_Query_2014-07-31_to_2026-11-01.csv
+  --chargeback-file /data/disputes/AllDisputeCases_20231102000000_20261031235959_O_01.CSV \
+  --chargeback-file /data/disputes/Disputes_Export_Query_2014-07-31_to_2026-11-01.csv
 
 # Re-score using the chargebacks already loaded
 python3 fraud_risk_report.py
