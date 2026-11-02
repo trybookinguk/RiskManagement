@@ -329,6 +329,44 @@ the effect of rule changes can be tracked.
   6. Retire the fraud code in s3reporting. That means a trimmed s3reporting#46
      **without** the `/risk` mount and openpyxl change.
 
-## 9. What's needed (open questions)
+## 9. Decisions (2026-11-02)
 
-See the PR conversation for the current list.
+These override anything above that conflicts with them.
+
+| # | Topic | Decision | Effect on the design |
+| --- | --- | --- | --- |
+| 1 | **Castle** | Pro plan, API keys available, logins only. | Pro doesn't include the Events API, which is Enterprise-only, so there's **no read API to pull past logins**. RiskManagement must **not** call Castle's Risk, Filter or Log APIs, because those create events (see 9.1). Login data comes from **TryBooking's own backend**: it already receives Castle's response on every login, so it should store it and add it to the S3 exports as a new `UserLogins` report (9.1). There are no checkout events, so **browser and time zone at purchase stay unavailable**. Browser Time Zone moves to the login level (user's device vs usual), and N5 location mismatch uses IP, card, purchaser postcode and event postcode only. |
+| 2 | **Stripe** | No Radar for Fraud Teams, so use `risk_level`. A restricted read-only key can be created. Incremental only. | Average Risk Score maps `normal`=10, `elevated`=60, `highest`=90 and `not_assessed`/`unknown` = no data (configurable). `ingest_stripe` **lists** charges with `created ≥ cursor`, 100 per page, rather than one call per booking. A one-off backfill covers the 400-day window, then only new charges. Charges join to bookings on `GatewayId` / `GatewayReference` (charge or PaymentIntent id), with the description GUID as the fallback. **Stripe Data Pipeline** (Stripe's warehouse sync) is a paid alternative; the API is enough at this volume. |
+| 3 | **Postcodes** | Event postcode and ticket purchaser postcode are available. | `EventPostcode` is in BookingData. **The purchaser postcode is not in the Nov 2026 BookingData inventory**, which has only EventPostcode and AccountPostcode. Use Stripe `billing_details.address.postal_code` when present, and ask for the purchaser postcode to be added to the BookingData export so PayPal bookings are covered too. Postcodes are compared at **outward-code** level (e.g. `SW1A`), with a distance band to the event. |
+| 4 | **Email delivery** | Mailgun later, on hold. | Failed Email Delivery stays `active: false` and reports as **Not measured**. A Mailgun events feed can be added later as `ingest_mailgun`. |
+| 5 | **PayPal** | Keep the CSV export. PayPal customers are low risk. | `load_paypal` keeps the CSV path. PayPal bookings have no card data, so card conditions judge only the Stripe share of the sample. Optionally add a configurable `gateway_weight` (PayPal ×0.8). |
+| 6 | **Starting values** | Accepted as in sections 4–6: exposure bands, age multipliers, the P1–P4 grid, and 365-day / 180-day profiles. | — |
+| 7 | **Report** | Daily. | DSM Task Scheduler runs 05:00 every day. |
+| 8 | **Repo** | Private. | The NAS pulls with a read-only **deploy key** (`deploy/synology/README.md`). |
+
+### 9.1 Castle on Pro: what's safe
+
+| Castle API | What it does | Safe from RiskManagement? |
+| --- | --- | --- |
+| Risk / Filter (`/v1/risk`, `/v1/filter`) | Scores a **live** request and records it as an event against the user | **No.** Batch calls would add fake events to users' histories, skew Castle's device and location learning, could trigger policies (challenge, deny) against real organisers, and count toward plan usage. |
+| Log (`/v1/log`) | Records an event | **No**, for the same reasons. |
+| Events API (`/v1/events/query`) | Read-only query of stored events | Safe, but **Enterprise only**. |
+| Dashboard CSV export | Manual download | Safe. Can be loaded with `--logins-file` as a stopgap. |
+
+**Recommended:** the TryBooking backend saves what Castle returns at each
+login: user id, timestamp, IP, IP country, device or user agent, risk score,
+policy action and signals. It goes into its own table, exported nightly to S3
+as `YYYYMM-UserLogins-TBUK.csv`. This adds **no** Castle API calls and no load
+on the application. `ingest_s3` loads it into `castle_events`. Until it
+exists, the user-level conditions show "No data". The Exposure score and the
+Stripe and S3 fraud conditions don't depend on it.
+
+## 10. Still needed
+
+1. **TryBooking dev:** the `UserLogins` S3 export (9.1) and the purchaser
+   postcode column in BookingData.
+2. **Stripe:** a restricted key with read access to Charges, PaymentIntents,
+   Disputes, Early fraud warnings and Reviews. Also confirm whether S3's
+   `GatewayId` holds the charge id (`ch_…`) or the PaymentIntent id (`pi_…`).
+   One sample row is enough.
+3. **NAS:** set up the deploy key (`deploy/synology/README.md`).
