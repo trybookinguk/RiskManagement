@@ -64,7 +64,9 @@ RiskManagement no longer imports s3reporting at runtime.
 | --- | --- | --- | --- |
 | `bookings` | S3 `BookingDataAll` (seed / full refresh) + `BookingData` (nightly) | BookingTransactionId | **Lifetime**, slim (about 20 columns): booking, event, account, amounts, status, payment type, IP country, booking country, event postcode, gateway ids, wallet. IP address **hashed** (section 4). |
 | `account_lifetime`, `event_lifetime` | derived from `bookings` nightly | AccountId / EventId | Lifetime totals for scoring: events, bookings, tickets, gross, refunds, foreign-IP share, first and last dates, sales per event |
-| `accounts` | S3 `Accounts` | AccountId | Name, status, created date (account age), bank account status, verified, country, postcode (**outward code** only) |
+| `accounts` | S3 `Accounts` | AccountId | Name, status, **DateTimeCreated** (account created), **FirstEventCreation**, **LastEventCreation**, bank account status, verified, country, postcode (**outward code** only) |
+| `account_snapshots` | S3 `Accounts`, daily | (AccountId, snapshot date) | LastEventCreation, status, bank account status. When LastEventCreation changes, a new event was created on that date, which gives each new event its own created date from now on (§3.1). |
+| `events` | derived from `bookings` + `account_snapshots` | EventId | AccountId, event name, **first session date** (`MIN(EventDate)`), last session date, first and last booking date, **EventCreated** + `EventCreatedSource` (§3.1) |
 | `users` | S3 `users` | UserId | AccountId, role, last login. Username/email **hashed**. |
 | `balances` | S3 `RiskReport` | (AccountId, snapshot date) | FullBalance, Balance, SalesForUpcomingEvents, Exposure, FutureDays. Kept **daily**, so exposure history is available. |
 | `gateway_recon` | S3 `TransactionReconciliation` | (BookingTransactionId, GatewayId, Transaction) | Card type, **last 4**, amount, gateway message, provider, payout id. **1,100 days.** |
@@ -78,6 +80,23 @@ RiskManagement no longer imports s3reporting at runtime.
 | `import_log` | all jobs | run id | source, file or day, rows read/inserted/updated, status, error, started/finished |
 | `stripe_sync` | Stripe jobs | (object, day) | status, rows, completed at. Used for resume and catch-up. |
 | `dashboard_users`, `api_audit` | API | — | Allowed sign-ins and roles, and every request (section 6) |
+
+### 3.1 Event created date
+
+S3 doesn't export a created date per event. It has only the account's
+`FirstEventCreation` and `LastEventCreation`. Each event's `EventCreated` is
+taken from the best source available, and the source is recorded so the
+dashboard and the score can show how reliable it is:
+
+| `EventCreatedSource` | Rule | Reliability |
+| --- | --- | --- |
+| `export` | An EventCreated column in the export, **if TryBooking adds one** (requested) | exact |
+| `snapshot` | The event's first booking falls after a day on which `LastEventCreation` changed. Use that `LastEventCreation`. | exact to the day, for events created after go-live |
+| `last_event` | The account's newest event by first booking date gets `LastEventCreation` (and the oldest gets `FirstEventCreation`) | exact for those two events |
+| `first_booking` | Otherwise, the event's first booking date. An event must exist before its first sale, so this is the **latest** it can have been created. | upper bound |
+
+The `--full-refresh` seed fills historic events from `last_event` and
+`first_booking`. From go-live, daily snapshots give `snapshot`.
 
 - **Indexes:** AccountId, EventId, GatewayId, BookingUrlId, TransactionDate,
   (card brand, last4), card fingerprint, email HMAC, phone HMAC.
@@ -128,7 +147,8 @@ Other safeguards:
   - Upserts `BookingData` for the current and previous month.
   - Reads the newest `Accounts`, `users`, `RiskReport` and
     `TransactionReconciliation`.
-  - Rebuilds `account_lifetime` and `event_lifetime`.
+  - Saves the daily `account_snapshots` row and rebuilds `events` (with
+    EventCreated, §3.1), `account_lifetime` and `event_lifetime`.
   - Prunes `gateway_recon` to 1,100 days.
 - **Columns:** only those listed in section 3 (`usecols`), streamed in chunks.
 - **`--full-refresh`:** streams the newest non-empty **BookingDataAll** (~2 GB)
@@ -206,8 +226,8 @@ so it can never change the warehouse. It serves two things:
 | Page | Shows |
 | --- | --- |
 | **Search** (home) | One box that recognises what you typed: account id or name, event id, Booking ID, BookingTransactionId, booking GUID, gateway id (`ch_`, `pi_`, PayPal), card `VISA 1234`, email, or phone. Email and phone are hashed on the server straight away and never logged. |
-| **Account** | Tier, age, status, bank account; current balances and the **balance history** chart; lifetime totals; events; disputes; declines |
-| **Event** | Lifetime sales, bookings, tickets, refunds, declines, foreign-IP share; bookings and transactions |
+| **Account** | Tier, age, status, bank account; **timeline**: account created → first event created → last event created → next event date, with the gaps in days; current balances and the **balance history** chart; lifetime totals; events; disputes; declines |
+| **Event** | Created date (and its source), first session date, days from account created → event created → event date; lifetime sales, bookings, tickets, refunds, declines, foreign-IP share; bookings and transactions |
 | **Booking** | The S3 booking, SharePoint transaction rows (with declines), Stripe charge (card country, risk level, checks), dispute |
 | **Card** (brand + last 4, or fingerprint) | Every booking on that card, across events and organisers, with how many distinct purchasers (by hash) used it |
 | **Purchaser** (email or phone) | Every booking and card linked to that hash |
@@ -333,7 +353,12 @@ so it can never change the warehouse. It serves two things:
 | 4 | API users | **A dashboard web interface.** | §6 |
 | 5 | Retention | **1,100 days** for payment transactions. **Lifetime** for accounts and events, via a BookingDataAll full refresh. Stripe nightly plus date range on request. | §3, §5.1, §5.4 |
 
+| 6 | Timeline dates | Capture **Date Account Created**, **Date Last Event Created** and **Date of Event**, and add a fraud-score element based on the gaps between them (one week). | §3 `accounts`, `account_snapshots`, `events`; §3.1; architecture.md N12 |
+
 **Still needed (not blocking build steps 1–4):**
+- **TryBooking dev (nice to have):** add an `EventCreated` column to the
+  BookingData export, or an Events export. That gives an exact created date for
+  every event, including historic ones (§3.1).
 - A DNS name for the dashboard on the NAS, e.g. `risk.<nas-hostname>`, and
   whether the office uses a VPN.
 - An Entra app registration for the dashboard sign-in. I'll give the exact

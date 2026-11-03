@@ -193,6 +193,15 @@ models:
          threshold: 3, weight: 6, active: false}
       - {id: card_reuse_address_change, metric: card_reuse_distinct_addresses, level: event,
          window: 30d, threshold: 2, weight: 8, active: false}
+      - id: compressed_timeline            # N12
+        level: event
+        metric: timeline_short_gaps        # gaps A, B, C in days
+        min_gap_days: 7                    # each gap below this adds risk
+        points: {per_short_gap: [[1, 2.5], [3, 2], [7, 1.5]]}   # gap under 1 / 3 / 7 days
+        all_short: full_weight             # all three gaps under 7 days = 8 pts
+        weight: 8                          # cap
+        upper_bound_dates_factor: 0.5      # EventCreated from first booking only
+        active: true
       # ...
 ```
 
@@ -270,6 +279,7 @@ are set after reviewing the shadow results.
 | N9 | **Radar blocked or elevated share** | event | `outcome.type = blocked` or `risk_level = elevated / highest` | |
 | N10 | **CVC or postcode check failures** | event | `checks.cvc_check` and `address_postal_code_check` = fail | |
 | N11 | **Castle deny or challenge rate** | user → account | Castle policy actions | |
+| N12 | **Compressed timeline** (account created → event created → event date) | event, account | Three gaps, in days: **A** account created → event created, **B** event created → first session, **C** account created → first session. Dates: `Accounts.DateTimeCreated`, the event's `EventCreated` (or `LastEventCreation` for the account's latest event), and `MIN(EventDate)`. | **Safe** when every gap is **at least 7 days**. Each gap under 7 days adds risk, and shorter gaps add more. All three under 7 days (a brand-new account selling an event that happens within the week) scores the full weight. Starts at weight 8, **active**, as requested; the threshold is configurable. Events whose created date is only an upper bound (`first_booking`) score at half weight. |
 | M1 | **Account age** | account | Days since `DateTimeCreated` | A **multiplier** on the fraud score, not points: ×1.5 under 30 days, ×1.3 under 90, ×1.15 under 365. |
 | — | Chargebacks (lost, open, fraud, ratio) | event, account | Stripe disputes + PayPal CSV | Carried over from today. Outcome evidence, kept as fraud conditions. |
 
