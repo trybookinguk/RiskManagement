@@ -9,7 +9,7 @@ Conventions
 - Dates/times are ISO-8601 TEXT ('YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS', UTC for
   Stripe, as exported for S3).
 - Money is REAL in pounds.
-- ``*Hash`` columns are crypto.Hasher hashes (64 hex chars); personal data is
+- ``*Hash`` columns are crypto.Hasher hashes (32 hex chars); personal data is
   never stored in clear.
 - ``UpdatedAt`` is when the row was last written by an ingest job (UTC).
 """
@@ -359,5 +359,62 @@ CREATE TABLE api_audit (
 CREATE INDEX ix_audit_at ON api_audit(At);
 """),
 ]
+
+MIGRATIONS.append((2, "slimmer bookings: event names table, 32-char hashes, no per-row UpdatedAt", """
+CREATE TABLE event_names (
+    EventId   INTEGER PRIMARY KEY,
+    AccountId INTEGER,
+    EventName TEXT
+);
+INSERT INTO event_names (EventId, AccountId, EventName)
+    SELECT EventId, MAX(AccountId), MAX(EventName) FROM bookings WHERE EventId IS NOT NULL GROUP BY EventId;
+
+CREATE TABLE bookings_v2 (               -- lifetime, slim
+    BookingTransactionId INTEGER PRIMARY KEY,
+    BookingId           INTEGER,
+    BookingUrlId        TEXT,           -- booking GUID
+    AccountId           INTEGER,
+    EventId             INTEGER,
+    TransactionDate     TEXT,
+    EventDate           TEXT,           -- session date (Date of Event)
+    PaymentReceived     REAL,
+    TicketQuantity      INTEGER,
+    BookingFee          REAL,
+    Status              TEXT,
+    TransactionType     TEXT,
+    PaymentType         TEXT,
+    IPCountry           TEXT,
+    IPHash              TEXT,
+    BookingCountryCode  TEXT,
+    EventPostcodeOutward TEXT,
+    GatewayName         TEXT,
+    GatewayId           TEXT,
+    GatewayReference    TEXT,
+    Wallet              TEXT,
+    CustomerId          INTEGER
+);
+INSERT INTO bookings_v2
+    SELECT BookingTransactionId, BookingId, BookingUrlId, AccountId, EventId, TransactionDate, EventDate,
+           PaymentReceived, TicketQuantity, BookingFee, Status, TransactionType, PaymentType, IPCountry,
+           SUBSTR(IPHash, 1, 32), BookingCountryCode, EventPostcodeOutward, GatewayName, GatewayId,
+           GatewayReference, Wallet, CustomerId
+    FROM bookings;
+DROP TABLE bookings;
+ALTER TABLE bookings_v2 RENAME TO bookings;
+CREATE INDEX ix_bookings_account ON bookings(AccountId, TransactionDate);
+CREATE INDEX ix_bookings_event ON bookings(EventId);
+CREATE INDEX ix_bookings_bookingid ON bookings(BookingId);
+CREATE INDEX ix_bookings_urlid ON bookings(BookingUrlId);
+CREATE INDEX ix_bookings_gateway ON bookings(GatewayId);
+CREATE INDEX ix_bookings_ip ON bookings(IPHash);
+
+UPDATE users SET UsernameHash = SUBSTR(UsernameHash, 1, 32);
+UPDATE booking_transactions SET FirstNameHash = SUBSTR(FirstNameHash, 1, 32),
+    LastNameHash = SUBSTR(LastNameHash, 1, 32), EmailHash = SUBSTR(EmailHash, 1, 32),
+    PhoneHash = SUBSTR(PhoneHash, 1, 32);
+UPDATE booking_transaction_history SET EmailHash = SUBSTR(EmailHash, 1, 32), PhoneHash = SUBSTR(PhoneHash, 1, 32);
+UPDATE stripe_charges SET BillingPostcodeHash = SUBSTR(BillingPostcodeHash, 1, 32),
+    BillingEmailHash = SUBSTR(BillingEmailHash, 1, 32);
+"""))
 
 LATEST_VERSION = MIGRATIONS[-1][0]

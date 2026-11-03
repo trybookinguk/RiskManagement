@@ -13,7 +13,7 @@ def hasher():
 
 def test_email_normalised(hasher):
     assert hasher.email(" Jane.Doe@Example.COM ") == hasher.email("jane.doe@example.com")
-    assert len(hasher.email("a@b.c")) == 64
+    assert len(hasher.email("a@b.c")) == 32
 
 
 def test_kinds_do_not_collide(hasher):

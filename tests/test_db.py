@@ -97,3 +97,26 @@ def test_failed_migration_rolls_back(env, monkeypatch):
     assert db.schema_version(conn) == schema.LATEST_VERSION
     assert "ok1" not in db.table_counts(conn)
     conn.close()
+
+
+def test_upgrade_v1_to_v2_keeps_data(env, monkeypatch):
+    s = config.get_settings()
+    conn = db.connect(s.risk_db)
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS[:1])
+    monkeypatch.setattr(db, "LATEST_VERSION", 1)
+    db.init_db(conn, s.risk_passphrase)
+    full = "a" * 32 + "b" * 32
+    with conn:
+        conn.execute("INSERT INTO bookings(BookingTransactionId, AccountId, EventId, EventName, IPHash, UpdatedAt) "
+                     "VALUES (1, 5, 50, 'Gala', ?, 'x')", (full,))
+        conn.execute("INSERT INTO users(UserId, UsernameHash) VALUES (1, ?)", (full,))
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS)
+    monkeypatch.setattr(db, "LATEST_VERSION", schema.LATEST_VERSION)
+    assert db.migrate(conn) == [2]
+    b = conn.execute("SELECT * FROM bookings").fetchone()
+    assert b["IPHash"] == "a" * 32 and "EventName" not in b.keys() and "UpdatedAt" not in b.keys()
+    assert tuple(conn.execute("SELECT EventId, AccountId, EventName FROM event_names").fetchone()) == (50, 5, "Gala")
+    assert conn.execute("SELECT UsernameHash FROM users").fetchone()[0] == "a" * 32
+    idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='bookings'")}
+    assert {"ix_bookings_ip", "ix_bookings_urlid", "ix_bookings_account"} <= idx
+    conn.close()

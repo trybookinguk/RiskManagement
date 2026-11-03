@@ -156,9 +156,13 @@ Other safeguards:
   month onward. Use it on the first run, and later whenever lifetime history
   needs rebuilding, e.g. after TryBooking corrects old data.
   - Memory use is one chunk at a time.
-  - Expect 10–20 minutes on the NAS.
-  - I expect the slim lifetime `bookings` table to be under 1 GB; it will be
-    measured on the first run.
+  - **Measured (step 2 test, 500,000 synthetic bookings):** 41 s, and
+    216 MB of warehouse including indexes, so about 430 bytes per booking.
+    BookingDataAll is about 2 GB, roughly 6–8 million bookings, so expect
+    **2.5–3.5 GB** and **25–35 minutes** on the NAS for the first load. That
+    replaces the earlier "under 1 GB" guess.
+  - Event names are kept once per event (`event_names`), not on every
+    booking.
 
 ### 5.2 `ingest_sharepoint.py` (nightly 04:20): "Platform Data > Booking Transactions"
 For each **CSV** in the folder:

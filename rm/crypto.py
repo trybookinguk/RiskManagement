@@ -3,7 +3,7 @@
 Personal data is never stored in clear. Each value is normalised (so
 "Jane@X.com " and "jane@x.com" match) and stored as a keyed hash:
 
-    HMAC-SHA256(hash_key, "<kind>:" + normalised value)  -> 64 hex chars
+    HMAC-SHA256(hash_key, "<kind>:" + normalised value)  -> first 32 hex chars
 
 The hash key comes from RISK_ENCRYPTION_PASSPHRASE via scrypt (with a random
 salt created once and kept in the warehouse ``meta`` table) and then HKDF, so
@@ -161,6 +161,11 @@ NORMALISERS = {
 # Hashing
 # ---------------------------------------------------------------------------
 
+# Stored hashes are the first 128 bits of the HMAC (32 hex chars): collision-safe
+# for billions of values, and half the space of the full digest on large tables.
+HASH_HEX_LEN = 32
+
+
 class Hasher:
     """Keyed hashing of personal values. Get one from ``db.get_hasher(conn, settings)``."""
 
@@ -170,14 +175,14 @@ class Hasher:
         self._key = hash_key
 
     def hash(self, kind: str, value):
-        """64-char hex hash of the normalised value, or None for a blank value."""
+        """32-char hex hash of the normalised value, or None for a blank value."""
         if kind not in NORMALISERS:
             raise ValueError(f"unknown kind {kind!r}")
         norm = NORMALISERS[kind](value)
         if norm is None:
             return None
         msg = f"{kind}:{norm}".encode("utf-8")
-        return hmac.new(self._key, msg, hashlib.sha256).hexdigest()
+        return hmac.new(self._key, msg, hashlib.sha256).hexdigest()[:HASH_HEX_LEN]
 
     def email(self, v):
         return self.hash("email", v)
