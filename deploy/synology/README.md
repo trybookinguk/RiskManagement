@@ -59,7 +59,18 @@ docker exec riskmanagement python3 bin/rm_admin.py status
 docker exec riskmanagement python3 -m pytest -q -p no:cacheprovider     # all tests should pass
 ```
 
-**6. Allow yourself on the dashboard** (used from step 5):
+**6. First S3 load.** This is the lifetime history from BookingDataAll. It
+writes about 2.5–3.5 GB and takes 25–35 minutes, so run it outside 02:00–04:00:
+```bash
+docker exec riskmanagement python3 bin/ingest_s3.py --full-refresh --dry-run   # shows the files it will read
+docker exec riskmanagement python3 bin/ingest_s3.py --full-refresh
+docker exec riskmanagement python3 bin/rm_admin.py status
+```
+From then on, the nightly 04:10 task (below) loads only the current and
+previous month. That takes about a minute. Rerun `--full-refresh` only if
+TryBooking corrects old data.
+
+**7. Allow yourself on the dashboard** (used from step 5):
 ```bash
 docker exec riskmanagement python3 bin/rm_admin.py add-user henry@trybooking.co.uk --role admin
 ```

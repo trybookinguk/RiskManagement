@@ -12,8 +12,8 @@ only on the Synology NAS.
 | Build step | State |
 | --- | --- |
 | 1. Skeleton: config, warehouse schema, hashing, admin tool, Docker | **done** |
-| 2. S3 ingest (bookings lifetime, accounts, balances, recon) | next |
-| 3. SharePoint "Booking Transactions" ingest | — |
+| 2. S3 ingest (bookings lifetime, accounts, balances, recon) | **done** |
+| 3. SharePoint "Booking Transactions" ingest | next |
 | 4. Stripe nightly + date-range backfill | — |
 | 5. Dashboard + JSON API | — |
 | 6. Backup, alerts, runbook | — |
@@ -26,7 +26,9 @@ only on the Synology NAS.
 | `rm/config.py` | Settings from `.env`. Each job checks only what it needs. |
 | `rm/crypto.py` | Keyed hashing of personal data, the card-number guard, and backup encryption |
 | `rm/db.py`, `rm/schema.py` | SQLite warehouse: connection, migrations, passphrase check, upsert, import log |
+| `rm/s3.py`, `rm/ingest/s3_reports.py` | S3 listing and streaming, report loaders, derived events and lifetime totals |
 | `bin/rm_admin.py` | `init-db`, `status`, dashboard users, API tokens |
+| `bin/ingest_s3.py` | Nightly S3 load; `--full-refresh` for lifetime history |
 | `tests/` | `python3 -m pytest -q` |
 | `deploy/synology/` | Dockerfile, docker-compose, NAS runbook |
 | `legacy/` | The previous fraud report, which still depends on s3reporting. Replaced in phase 2. |
