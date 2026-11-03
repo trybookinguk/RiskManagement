@@ -1,0 +1,47 @@
+# RiskManagement on the Synology NAS.
+#
+#   /volume1/docker/RiskManagement        this repo (git clone)        -> /app (read-only)
+#   /volume1/docker/RiskManagement/.env   secrets, chmod 600           -> environment
+#   /volume1/docker/riskmanagement-data   risk.db, logs, temp          -> /data
+#
+# Build/start from this folder:  sudo docker compose up -d --build
+services:
+  riskmanagement:
+    build:
+      context: ../..
+      dockerfile: deploy/synology/Dockerfile
+    image: riskmanagement:latest
+    container_name: riskmanagement
+    restart: unless-stopped
+    env_file:
+      - /volume1/docker/RiskManagement/.env
+    environment:
+      - TZ=Europe/London
+      - RISK_DATA_DIR=/data
+    volumes:
+      - /volume1/docker/RiskManagement:/app:ro
+      - /volume1/docker/riskmanagement-data:/data
+    working_dir: /app
+
+  # Dashboard + JSON API. Arrives in build step 5; start it then with
+  #   sudo docker compose --profile web up -d
+  riskmanagement-web:
+    image: riskmanagement:latest
+    container_name: riskmanagement-web
+    profiles: ["web"]
+    restart: unless-stopped
+    depends_on: [riskmanagement]
+    env_file:
+      - /volume1/docker/RiskManagement/.env
+    environment:
+      - TZ=Europe/London
+      - RISK_DATA_DIR=/data
+    volumes:
+      - /volume1/docker/RiskManagement:/app:ro
+      # Not mounted :ro on purpose: SQLite needs to write the WAL index (-shm)
+      # even for readers. The app itself opens risk.db read-only (mode=ro).
+      - /volume1/docker/riskmanagement-data:/data
+    working_dir: /app
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers"]
+    ports:
+      - "8085:8085"
