@@ -1,51 +1,50 @@
 # RiskManagement
 
-TryBooking UK fraud and risk tooling.
+TryBooking UK's risk data warehouse and fraud and exposure scoring. It runs
+only on the Synology NAS.
 
-| Script | What it does |
+- **Design:** [docs/architecture.md](docs/architecture.md)
+- **Build plan:** [docs/build_plan_phase1.md](docs/build_plan_phase1.md)
+- **NAS setup and runbook:** [deploy/synology/README.md](deploy/synology/README.md)
+
+## Status
+
+| Build step | State |
 | --- | --- |
-| `fraud_risk_report.py` | Fraud risk score per account and event: TryBooking risk tests, PayPal and Stripe chargebacks, and exposure. Writes `risk_fraud` to the warehouse, saves an xlsx to SharePoint and emails it to henry@trybooking.co.uk. See [docs/fraud_risk_report.md](docs/fraud_risk_report.md). |
+| 1. Skeleton: config, warehouse schema, hashing, admin tool, Docker | **done** |
+| 2. S3 ingest (bookings lifetime, accounts, balances, recon) | next |
+| 3. SharePoint "Booking Transactions" ingest | — |
+| 4. Stripe nightly + date-range backfill | — |
+| 5. Dashboard + JSON API | — |
+| 6. Backup, alerts, runbook | — |
+| Phase 2: risk models (`config/models.yaml`), scores, report | — |
 
 ## Layout
 
-- `fraud_risk_report.py`: the command-line script.
-- `fraud/risk.py`: risk tests, scoring and the `risk_fraud` tables.
-- `fraud/chargebacks.py`: loads PayPal "All Dispute Cases" and Stripe "Disputes export" files and matches them to bookings.
-- `fraud/countries.py`: ISO 3166 country table.
+| Path | Contents |
+| --- | --- |
+| `rm/config.py` | Settings from `.env`. Each job checks only what it needs. |
+| `rm/crypto.py` | Keyed hashing of personal data, the card-number guard, and backup encryption |
+| `rm/db.py`, `rm/schema.py` | SQLite warehouse: connection, migrations, passphrase check, upsert, import log |
+| `bin/rm_admin.py` | `init-db`, `status`, dashboard users, API tokens |
+| `tests/` | `python3 -m pytest -q` |
+| `deploy/synology/` | Dockerfile, docker-compose, NAS runbook |
+| `legacy/` | The previous fraud report, which still depends on s3reporting. Replaced in phase 2. |
 
-## Depends on s3reporting
+## Data protection
 
-The tool doesn't keep its own copy of the data pipeline. It uses these from
-[trybookinguk/s3reporting](https://github.com/trybookinguk/s3reporting):
+- **Personal data is hashed, never stored in clear.** This covers customer
+  emails, phones, names, IP addresses and full postcodes. The hash is keyed
+  from `RISK_ENCRYPTION_PASSPHRASE`.
+- **Cards** are stored as brand + last 4 (+ Stripe fingerprint). Any card
+  field with more than 4 unmasked digits is rejected.
+- **Never commit** `.env`, exports or `risk.db`. `.gitignore` blocks the usual
+  names.
 
-- the SQLite warehouse (`modules/warehouse.py`, which `prepare_data.py` loads nightly)
-- the tier snapshot
-- the S3 loader
-- the Graph email and SharePoint helpers
-- `.env`
-
-`fraud/__init__.py` finds the s3reporting checkout. It checks, in order:
-1. `$S3REPORTING_DIR`
-2. `/app`, the s3reporting container on the NAS
-3. `../s3reporting` next to this repo
-4. `/root/s3reporting`
-
-S3 tooling also stays in s3reporting:
-- `warehouse_backfill.py`: the one-off column refill.
-- `s3_inventory.py`: which S3 columns exist.
-
-## On the Synology NAS
-
-It runs inside the s3reporting Docker container, with this repo mounted at
-`/risk`. Setup, dispute-file location and scheduling are in
-[deploy/synology/README.md](deploy/synology/README.md).
+## Local development
 
 ```bash
-sudo docker exec -w /risk s3reporting python3 fraud_risk_report.py
+pip install -r requirements.txt
+python3 -m pytest -q
+RISK_DATA_DIR=/tmp/rm RISK_ENCRYPTION_PASSPHRASE=dev python3 bin/rm_admin.py init-db
 ```
-
-Outside the container, for example on the Pi, it also works with any
-s3reporting checkout found as above. Source `.env` first.
-
-**Never commit dispute exports, signals or login files.** They contain customer
-emails and names. `.gitignore` blocks the usual file names.

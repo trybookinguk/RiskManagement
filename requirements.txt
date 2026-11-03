@@ -1,3 +1,15 @@
-# Plus everything trybookinguk/s3reporting needs (boto3, msal, requests, ...).
-pandas
-openpyxl
+# RiskManagement runtime (installed in the NAS image by deploy/synology/Dockerfile)
+pandas>=2.1
+boto3>=1.34
+requests>=2.31
+msal>=1.26
+cryptography>=42
+stripe>=8
+tzdata>=2024.1
+# dashboard (step 5)
+fastapi>=0.110
+uvicorn>=0.29
+jinja2>=3.1
+# legacy report + tests
+openpyxl>=3.1
+pytest>=8
