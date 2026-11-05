@@ -1,13 +1,19 @@
 #!/bin/bash
 # bootstrap.sh - first-time RiskManagement setup on the Synology NAS, no SSH.
 #
-# Paste this whole file into a DSM Task Scheduler task:
-#   Control Panel > Task Scheduler > Create > Scheduled Task > User-defined script
-#   General: name "RiskManagement bootstrap", user "root", untick Enabled
-#   Task Settings: tick "Send run details by email", paste this script
-# then select the task and click Run. Run it again after each step it asks for;
-# it carries on from where it stopped. It needs: Container Manager and
-# Git Server (both from Package Center).
+# Don't paste this file into Task Scheduler: DSM refuses to save long scripts
+# containing < or > ("Connection failed. Please check your network settings").
+# Instead:
+#   1. Download it from GitHub (deploy/synology/bootstrap.sh > Download raw file)
+#      and upload it with File Station to the "docker" shared folder.
+#   2. Control Panel > Task Scheduler > Create > Scheduled Task > User-defined script
+#      General: name "RiskManagement bootstrap", user "root", untick Enabled
+#      Task Settings: tick "Send run details by email"; Run command:
+#          sed -i 's/\r$//' /volume1/docker/bootstrap.sh; bash /volume1/docker/bootstrap.sh
+#      (the sed fixes Windows line endings if the file went through a PC)
+#   3. Select the task and click Run. Run it again after each step it asks for;
+#      it carries on from where it stopped.
+# It needs Container Manager and Git Server (both from Package Center).
 #
 # Each run:
 #   1. creates the folders                 docker/RiskManagement, docker/riskmanagement-data

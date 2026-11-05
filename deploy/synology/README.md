@@ -23,7 +23,7 @@ in this folder do the work:
 
 | Script | Use |
 | --- | --- |
-| `bootstrap.sh` | One-off first-time setup. You paste it into a Task Scheduler task and click Run a few times. |
+| `bootstrap.sh` | One-off first-time setup. You upload it with File Station, point a Task Scheduler task at it, and click Run a few times. |
 | `rmctl.sh` | Every task after that: nightly jobs, updates, status, users. |
 
 ## 1. Before you start (Package Center)
@@ -41,6 +41,14 @@ encrypted at rest. If it doesn't exist, the bootstrap creates a plain folder.
 
 ## 2. First-time setup: the bootstrap task
 
+**Upload the script.** Don't paste it into Task Scheduler: DSM won't save
+long scripts that contain `<` or `>`, and shows *"Connection failed. Please
+check your network settings"*.
+1. On GitHub open `deploy/synology/bootstrap.sh` and click **Download raw
+   file**.
+2. In **File Station** open the **docker** shared folder → Upload → choose
+   `bootstrap.sh`. It is now at `/volume1/docker/bootstrap.sh`.
+
 **Create the task once.**
 1. Control Panel → **Task Scheduler** → Create → Scheduled Task →
    **User-defined script**.
@@ -48,10 +56,12 @@ encrypted at rest. If it doesn't exist, the bootstrap creates a plain folder.
    - Task: `RiskManagement bootstrap`
    - User: **root**
    - **Untick Enabled**, because it only runs when you click Run.
-3. On the **Task Settings** tab:
-   - Tick *Send run details by email* and enter your address.
-   - **Paste the whole of `deploy/synology/bootstrap.sh`** into *Run command*.
-     Open it on GitHub, choose Raw, select all and copy.
+3. On the **Task Settings** tab, tick *Send run details by email*. Set *Run
+   command* to this one line:
+   ```
+   sed -i 's/\r$//' /volume1/docker/bootstrap.sh; bash /volume1/docker/bootstrap.sh
+   ```
+   The `sed` part fixes Windows line endings if the file passed through a PC.
 4. Click OK.
 
 **Then select the task and click Run.** Each run stops at the next thing it
