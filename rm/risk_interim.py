@@ -193,6 +193,7 @@ def _declines(conn, since: str):
         SELECT m.EventId, COUNT(*) AS attempts, SUM(CASE WHEN h.IsDecline = 1 THEN 1 ELSE 0 END) AS declines
         FROM booking_transaction_history h JOIN temp._txn_event m ON m.BookingGuid = h.BookingGuid
         WHERE m.EventId IS NOT NULL AND h.TransactionDate >= ?
+          AND LOWER(COALESCE(h.TransactionType,'')) NOT LIKE '%refund%'
         GROUP BY m.EventId""", (since,)).fetchall()
     return {r["EventId"]: (r["attempts"], r["declines"]) for r in rows}
 

@@ -118,6 +118,9 @@ def import_health(conn, now_utc: datetime) -> list:
     return rows
 
 
+REFUND_SQL = "LOWER(COALESCE(TransactionType,'')) LIKE '%refund%'"
+
+
 def check_transactions(conn, today: date) -> dict:
     """Quality check of the SharePoint Booking Transactions import."""
     since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
@@ -128,9 +131,9 @@ def check_transactions(conn, today: date) -> dict:
     n = _one(conn, "SELECT COUNT(*) FROM booking_transactions") or 0
     if not n:
         return {"rows": 0, "files": files, "last_files": last_files}
-    attempts = conn.execute("""SELECT COUNT(*) n, SUM(CASE WHEN IsDecline=1 THEN 1 ELSE 0 END) dec,
+    attempts = conn.execute(f"""SELECT COUNT(*) n, SUM(CASE WHEN IsDecline=1 THEN 1 ELSE 0 END) dec,
                                       SUM(CASE WHEN IsDecline IS NULL THEN 1 ELSE 0 END) unk
-                               FROM booking_transaction_history""").fetchone()
+                               FROM booking_transaction_history WHERE NOT ({REFUND_SQL})""").fetchone()
     summary = conn.execute("""SELECT MIN(TransactionDate) d0, MAX(TransactionDate) d1,
                                      SUM(CASE WHEN EmailHash IS NOT NULL THEN 1 ELSE 0 END) em,
                                      SUM(CASE WHEN PhoneHash IS NOT NULL THEN 1 ELSE 0 END) ph,
@@ -148,9 +151,22 @@ def check_transactions(conn, today: date) -> dict:
                         f"GROUP BY 1 ORDER BY n DESC LIMIT ?", limit)
 
     messages = _q(conn, """SELECT COALESCE(GatewayMessageDescription,'(blank)') AS value,
-                                  CASE MAX(IsDecline) WHEN 1 THEN 'decline' WHEN 0 THEN 'approved' ELSE 'UNCLASSIFIED' END AS class,
+                                  COALESCE(Status,'(blank)') AS status,
+                                  CASE IsDecline WHEN 1 THEN 'decline' WHEN 0 THEN 'approved' ELSE 'UNCLASSIFIED' END AS class,
                                   COUNT(*) n
-                           FROM booking_transaction_history GROUP BY 1 ORDER BY n DESC LIMIT 30""")
+                           FROM booking_transaction_history GROUP BY 1, 2, 3 ORDER BY n DESC LIMIT 40""")
+    refunds = _one(conn, "SELECT COUNT(*) FROM booking_transaction_history WHERE " + REFUND_SQL) or 0
+    hint = None
+    if not match.get("booking_guid"):   # nothing linked to S3: show what's loaded and the GUID shapes
+        nb = _one(conn, "SELECT COUNT(*) FROM bookings") or 0
+        s3_guid = _one(conn, "SELECT BookingUrlId FROM bookings WHERE BookingUrlId IS NOT NULL "
+                             "ORDER BY TransactionDate DESC LIMIT 1")
+        bt_guid = _one(conn, "SELECT BookingGuid FROM booking_transactions LIMIT 1")
+        overlap = _one(conn, "SELECT MIN(TransactionDate) || ' to ' || MAX(TransactionDate) FROM bookings")
+        from .ingest.sharepoint_transactions import shape
+        hint = {"s3_bookings": nb, "s3_dates": overlap,
+                "s3_guid_shape": shape(s3_guid) if s3_guid else None,
+                "export_guid_shape": shape(bt_guid) if bt_guid else None}
     return {
         "rows": n, "versions": versions, "files": files, "last_files": last_files,
         "date_from": summary["d0"], "date_to": summary["d1"],
@@ -159,7 +175,7 @@ def check_transactions(conn, today: date) -> dict:
                  "waited in queue": summary["q"]},
         "match": match, "gateway_id_matches": gw,
         "status": values("Status"), "transaction": values("TransactionType"), "cvv": values("CvvCheck"),
-        "card_type": values("CardType"), "messages": messages,
+        "card_type": values("CardType"), "messages": messages, "refunds": refunds, "match_hint": hint,
     }
 
 
@@ -310,7 +326,7 @@ def _transactions_html(t) -> str:
     m = t["match"]
     total = sum(m.values()) or 1
     out.append(f"<p>{t['rows']:,} bookings ({t['versions']:,} row versions), {e(str(t['date_from']))[:10]} to "
-               f"{e(str(t['date_to']))[:10]}. Of {t['attempts']:,} payment attempts: {t['declines']:,} declined, "
+               f"{e(str(t['date_to']))[:10]}. Of {t['attempts']:,} payment attempts (refunds excluded): {t['declines']:,} declined, "
                f"{t['unclassified']:,} unclassified.</p>")
     out.append(_table(["Matched to an event by", "Bookings", "%"],
                       [[k, v, f"{100 * v / total:.1f}%"] for k, v in sorted(m.items())]))
@@ -318,9 +334,16 @@ def _transactions_html(t) -> str:
                       [[k, v, f"{100 * v / t['rows']:.1f}%"] for k, v in t["fill"].items()]
                       + [["Gateway ID found in S3 bookings", t["gateway_id_matches"],
                           f"{100 * t['gateway_id_matches'] / t['rows']:.1f}%"]]))
-    out.append("<p>Gateway Message Description, as classified. Tell me how any <b>UNCLASSIFIED</b> ones should be "
-               "treated:</p>" + _table(["Message", "Treated as", "Rows"],
-                                       [[x["value"], x["class"], x["n"]] for x in t["messages"]]))
+    if t.get("match_hint"):
+        h = t["match_hint"]
+        out.append(f"<p><b>No transactions linked to S3 bookings.</b> S3 bookings loaded: {h['s3_bookings']:,} "
+                   f"({e(str(h['s3_dates']))}). GUID format in S3: {e(str(h['s3_guid_shape']))}; in the export: "
+                   f"{e(str(h['export_guid_shape']))}. If S3 bookings is 0 or doesn't cover these dates, run the "
+                   "full refresh.</p>")
+    out.append(f"<p>{t['refunds']:,} refund rows are excluded from the decline figures.</p>")
+    out.append("<p>Gateway Message Description by Status, as classified. Tell me how any <b>UNCLASSIFIED</b> ones "
+               "should be treated:</p>" + _table(["Message", "Status", "Treated as", "Rows"],
+                                                 [[x["value"], x["status"], x["class"], x["n"]] for x in t["messages"]]))
     for label, key in (("Status", "status"), ("Transaction", "transaction"), ("Cvv Check", "cvv"),
                        ("Card Type", "card_type")):
         out.append(f"<p>{label} values:</p>" + _table(["Value", "Rows"], [[x["value"], x["n"]] for x in t[key]]))
