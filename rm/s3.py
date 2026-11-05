@@ -126,15 +126,40 @@ def clean_col(name) -> str:
     return str(name).replace("﻿", "").replace("​", "").strip()
 
 
-def header_offset(head: bytes) -> tuple:
-    """(lines to skip, header cells) from the first bytes of an export.
+_DELIMITERS = (",", "\t", "|", ";")
 
-    Skips gateway-batch preamble lines (AccountMovement*, GatewayMovement,
+
+def _norm(name) -> str:
+    return re.sub(r"[^a-z0-9]", "", clean_col(name).lower())
+
+
+def sniff(head: bytes, columns=()) -> tuple:
+    """(lines to skip, header cells, delimiter) from the first bytes of an export.
+
+    Tries comma, tab, pipe and semicolon. If ``columns`` are given, the first
+    line (under any delimiter) holding the most of them is the header, so an
+    unknown preamble or a lone ``NULL`` line is skipped. Otherwise it falls back
+    to skipping gateway-batch preamble lines (AccountMovement*, GatewayMovement,
     TransactionReconciliation) and stray narrow lines before the real header.
     """
     text = head.decode("utf-8-sig", errors="replace")
-    lines = text.splitlines()[:8]
-    rows = [[clean_col(c) for c in r] for r in csv.reader(lines)]
+    lines = text.splitlines()[:12]
+    if not lines:
+        return 0, [], ","
+    wanted = {_norm(c) for c in columns}
+    if wanted:
+        best = None
+        for sep in _DELIMITERS:
+            for i, r in enumerate(csv.reader(lines, delimiter=sep)):
+                hits = sum(1 for c in r if _norm(c) in wanted)
+                if hits and (best is None or hits > best[0]):
+                    best = (hits, i, [clean_col(c) for c in r], sep)
+        if best:
+            return best[1], best[2], best[3]
+
+    # No known column found: the delimiter giving the widest rows wins.
+    sep = max(_DELIMITERS, key=lambda d: (max(len(r) for r in csv.reader(lines, delimiter=d)), d == ","))
+    rows = [[clean_col(c) for c in r] for r in csv.reader(lines, delimiter=sep)]
 
     def filled(r):
         return sum(1 for c in r if c)
@@ -147,25 +172,55 @@ def header_offset(head: bytes) -> tuple:
     for i, r in enumerate(rows):
         if not filled(r) or is_preamble(r) or (widest >= 2 and filled(r) < max(2, widest // 2)):
             continue
-        return i, [c for c in r]
-    return 0, rows[0] if rows else []
+        return i, [c for c in r], sep
+    return 0, rows[0] if rows else [], sep
+
+
+def header_offset(head: bytes) -> tuple:
+    """(lines to skip, header cells) - comma files; see sniff()."""
+    skip, header, _ = sniff(head)
+    return skip, header
+
+
+def _shape(cell: str) -> str:
+    """A header cell as-is if it looks like a column name, else its shape (no data values)."""
+    c = clean_col(cell)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,40}", c) and not re.search(r"\d{3}", c):
+        return c
+    return re.sub(r"[a-z]", "x", re.sub(r"[A-Z]", "X", re.sub(r"\d", "9", c)))[:20] or "(blank)"
+
+
+def describe_head(head: bytes) -> str:
+    """Safe one-line description of the first lines of a file, for errors: field
+    counts per delimiter and the cells of each line, data values shown as shapes."""
+    text = head.decode("utf-8-sig", errors="replace")
+    lines = text.splitlines()[:4]
+    out = []
+    for n, line in enumerate(lines, 1):
+        counts = {repr(d): len(next(csv.reader([line], delimiter=d))) for d in _DELIMITERS}
+        sep = max(_DELIMITERS, key=lambda d: counts[repr(d)])
+        cells = next(csv.reader([line], delimiter=sep))
+        shown = " | ".join(_shape(c) for c in cells[:16]) + (" | ..." if len(cells) > 16 else "")
+        out.append(f"line {n}: fields per delimiter {counts}; {shown}")
+    return "; ".join(out) or "file is empty"
 
 
 def read_chunks(source, key: str, columns, chunksize: int = 100_000):
     """Yield DataFrames (all str) holding only ``columns`` that exist in the file.
 
-    ``columns`` are canonical names; matching is case-insensitive and ignores
-    BOMs/whitespace, and output columns use the canonical spelling. Missing
-    columns are simply absent — callers decide which are required.
+    ``columns`` are canonical names; matching ignores case, BOMs, spaces and
+    underscores, and output columns use the canonical spelling. The delimiter
+    (comma, tab, pipe, semicolon) and any preamble are detected from the first
+    64 KB. Missing columns are simply absent - callers decide which are required.
     """
-    skip, header = header_offset(source.head_bytes(key, 64 * 1024))
-    by_lower = {c.lower(): c for c in columns}
-    rename = {h: by_lower[h.lower()] for h in header if h.lower() in by_lower}
+    skip, header, sep = sniff(source.head_bytes(key, 64 * 1024), columns)
+    by_norm = {_norm(c): c for c in columns}
+    rename = {h: by_norm[_norm(h)] for h in header if _norm(h) in by_norm}
     body = source.open(key)
     try:
-        reader = pd.read_csv(body, skiprows=skip, dtype=str, keep_default_na=False, chunksize=chunksize,
+        reader = pd.read_csv(body, skiprows=skip, sep=sep, dtype=str, keep_default_na=False, chunksize=chunksize,
                              usecols=lambda c: clean_col(c) in rename, encoding="utf-8-sig",
-                             on_bad_lines="warn")
+                             on_bad_lines="warn", quoting=csv.QUOTE_MINIMAL)
         for chunk in reader:
             chunk.columns = [rename[clean_col(c)] for c in chunk.columns]
             yield chunk

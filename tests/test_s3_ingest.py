@@ -355,3 +355,37 @@ def test_account_movements(env, bucket):
                         "ORDER BY 1").fetchall()
     assert [tuple(r) for r in rows] == [("2026-11-01", 1000.0, 1250.0, -500.0), ("2026-11-02", 1250.0, 1260.0, None)]
     conn.close()
+
+
+# ------------------------------------------------- header / delimiter sniffing ---
+
+@pytest.mark.parametrize("sep", ["\t", "|", ";", ","])
+def test_recon_any_delimiter_after_null_line(env, bucket, sep):
+    """TransactionReconciliation as seen on 5 Nov: a lone NULL line, then a non-comma header."""
+    key = "2026/11/202611-TransactionReconciliation-TBUK.csv"
+    lines = ["NULL", sep.join(RECON_HEADER),
+             sep.join(["77", "2026-11-03 10:00", "ch_77", guid(77), "VISA", "4242", "12.50", "Payment",
+                       "approved", "po_1", "2026-11-05", "Stripe", "Jane's Club"])]
+    (bucket / key).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert run("--local-dir", str(bucket), "--only", "TransactionReconciliation", "--force") == 0
+    conn = open_db()
+    r = conn.execute("SELECT GatewayId, CardLast4, Amount, Provider FROM gateway_recon "
+                     "WHERE BookingTransactionId=77").fetchone()
+    assert tuple(r) == ("ch_77", "4242", 12.5, "Stripe")
+    conn.close()
+
+
+def test_sniff_prefers_known_columns_and_spaced_names():
+    head = b"Report generated,2026-11-05\nBooking Transaction Id\tGateway Id\tCard No\n1\tch_1\t4242\n"
+    skip, header, sep = s3.sniff(head, ["BookingTransactionId", "GatewayId", "CardNo"])
+    assert (skip, sep) == (1, "\t") and header == ["Booking Transaction Id", "Gateway Id", "Card No"]
+    assert s3.sniff(b"A,B,C\n1,2,3\n") == (0, ["A", "B", "C"], ",")
+
+
+def test_unrecognised_header_is_described_without_data(env, bucket, capsys):
+    key = "2026/11/202611-TransactionReconciliation-TBUK.csv"
+    (bucket / key).write_text("NULL\nTxnRef~When~Card\n1~2026-11-03~Jane Doe 07700900123\n", encoding="utf-8")
+    assert run("--local-dir", str(bucket), "--only", "TransactionReconciliation", "--force") == 1
+    out = capsys.readouterr().out
+    assert "missing required columns" in out and "File starts: line 1:" in out and "NULL" in out
+    assert "Jane" not in out and "07700900123" not in out
