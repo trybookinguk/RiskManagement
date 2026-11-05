@@ -111,3 +111,21 @@ def test_empty_warehouse_report(warehouse, capsys):
     assert run_report("--no-email") == 0
     out = capsys.readouterr().out
     assert "Top 10 risk accounts" in out
+
+
+def test_check_matches_real_export_mix(warehouse, capsys):
+    """Shape of the 3 Nov export: blank messages on most rows, S1/S2 codes on failures, refunds, no S3 loaded."""
+    rows = ([row(i, "11/03/2026 10:00", desc="", status="Successful") for i in range(1, 9)]
+            + [row(20, "11/03/2026 10:01", desc="S1 - Unknown Reason", status="Failed"),
+               row(21, "11/03/2026 10:02", desc="", status="Failed"),
+               row(22, "11/03/2026 10:03", desc="", status="Unknown", **{"Gateway ID": ""}),
+               row(23, "11/03/2026 10:04", desc="", status="Successful", **{"Transaction": "RefundedOnline"})])
+    assert run_sp(FakeGraph({"3_Nov_26_BookingTransactionsReport.csv": to_csv(rows)}), today="2026-11-05") == 0
+    assert run_report("--check-transactions", today="2026-11-05") == 0
+    out = capsys.readouterr().out
+    assert "11 payment attempts (refunds excluded): 2 declined, 1 unclassified; 1 refund rows" in out
+    lines = [l for l in out.splitlines() if "(blank)" in l and ("approved" in l or "decline" in l)]
+    assert any("approved" in l and "Successful" in l for l in lines)        # blank+Successful shown as approved
+    assert any("decline" in l and "Failed" in l for l in lines)             # blank+Failed shown as decline
+    assert "No transactions linked to S3 bookings. S3 bookings loaded: 0" in out
+    assert "export: 99999999-9999-9999-9999-999999999999" in out

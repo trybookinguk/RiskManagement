@@ -40,14 +40,20 @@ def print_check(t):
         print("  No transactions imported yet.")
         return
     print(f"  {t['rows']:,} bookings, {t['versions']:,} row versions, {str(t['date_from'])[:10]} to {str(t['date_to'])[:10]}")
-    print(f"  {t['attempts']:,} payment attempts: {t['declines']:,} declined, {t['unclassified']:,} unclassified")
+    print(f"  {t['attempts']:,} payment attempts (refunds excluded): {t['declines']:,} declined, "
+          f"{t['unclassified']:,} unclassified; {t['refunds']:,} refund rows")
     total = sum(t["match"].values()) or 1
     print("  Matched to an event by: " + ", ".join(f"{k} {v:,} ({100 * v / total:.1f}%)" for k, v in sorted(t["match"].items())))
     print("  Filled: " + ", ".join(f"{k} {100 * v / t['rows']:.0f}%" for k, v in t["fill"].items())
           + f", Gateway ID in S3 bookings {100 * t['gateway_id_matches'] / t['rows']:.0f}%")
-    print("  Gateway Message Description (treated as):")
+    if t.get("match_hint"):
+        h = t["match_hint"]
+        print(f"  ! No transactions linked to S3 bookings. S3 bookings loaded: {h['s3_bookings']:,} ({h['s3_dates']})")
+        print(f"    GUID format - S3: {h['s3_guid_shape']}  export: {h['export_guid_shape']}")
+        print("    If S3 bookings is 0 or doesn't cover these dates, run the full refresh task.")
+    print("  Gateway Message Description / Status (treated as):")
     for x in t["messages"]:
-        print(f"    {x['n']:>8,}  {x['class']:<12} {x['value']}")
+        print(f"    {x['n']:>8,}  {x['class']:<12} {x['status']:<12} {x['value']}")
     for label, key in (("Status", "status"), ("Transaction", "transaction"), ("Cvv Check", "cvv"),
                        ("Card Type", "card_type")):
         print(f"  {label}: " + ", ".join(f"{x['value']} ({x['n']:,})" for x in t[key]))
