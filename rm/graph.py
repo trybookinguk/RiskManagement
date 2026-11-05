@@ -129,10 +129,11 @@ class Graph:
                      data=data, headers={"Content-Type": "text/plain"})
 
     # ----------------------------------------------------------------- mail --
-    def send_mail(self, to: str, subject: str, body_text: str) -> None:
+    def send_mail(self, to: str, subject: str, body_text: str, html: bool = False) -> None:
         if not self.sender:
             raise GraphError("AZURE_SENDER_MAILBOX is not set")
-        msg = {"message": {"subject": subject, "body": {"contentType": "Text", "content": body_text},
+        msg = {"message": {"subject": subject,
+                           "body": {"contentType": "HTML" if html else "Text", "content": body_text},
                            "toRecipients": [{"emailAddress": {"address": a.strip()}} for a in to.split(",") if a.strip()]},
                "saveToSentItems": False}
         self.request("POST", f"/users/{quote(self.sender)}/sendMail", ok=(202,), json=msg)

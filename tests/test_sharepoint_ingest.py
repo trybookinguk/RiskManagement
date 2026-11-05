@@ -83,7 +83,7 @@ class FakeGraph:
     def upload_small(self, folder, name, data):
         self.add(name, data, folder=folder)
 
-    def send_mail(self, to, subject, body):
+    def send_mail(self, to, subject, body, html=False):
         self.mail.append((to, subject, body))
 
 

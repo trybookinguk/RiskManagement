@@ -367,3 +367,33 @@ so it can never change the warehouse. It serves two things:
   whether the office uses a VPN.
 - An Entra app registration for the dashboard sign-in. I'll give the exact
   settings in step 5.
+
+## 11. Step 3b (added 2026-11-05)
+
+- **Balances by file date.** `balances.SnapshotDate` is now the S3 file's
+  last-written date in UK time, not the run date, so a RiskReport TryBooking
+  didn't refresh isn't stored as today's.
+- **Month-end history.** `--full-refresh` loads every month's RiskReport in
+  the window. Each month's final file gives a month-end exposure history.
+- **Daily movements.** `AccountMovementDaily` goes into `balance_movements`:
+  opening and closing balance, pending, ticket value, refunds, fund and
+  Stripe transfers.
+- **Nightly risk email** (`rmctl.sh report`, 05:00). It contains:
+  - what changed: balances against the previous and month-ago snapshots,
+    the biggest rises, and priority counts against the previous night
+  - new top-10 entries, new accounts and events created
+  - the top 10 risk accounts and top 10 upcoming risk events
+  - import health and the Booking Transactions check
+
+  Scores are kept per day in `risk_daily`.
+- **Interim model** (`rm/risk_interim.py`, `CONFIG`):
+  - **Exposure:** the account model from architecture §4.2; for events,
+    money held plus days to the session.
+  - **Fraud:** N12 compressed timeline, overseas IP share and declines, times
+    the M1 age multiplier.
+  - **Priority:** from the §6.4 matrix.
+
+  Phase 2 replaces it with `config/models.yaml`.
+- **Transactions to events.** SharePoint transactions map to events by
+  Booking ID, otherwise by a unique (event name, organiser) pair. The import
+  check reports the split.

@@ -14,7 +14,9 @@ only on the Synology NAS.
 | 1. Skeleton: config, warehouse schema, hashing, admin tool, Docker | **done** |
 | 2. S3 ingest (bookings lifetime, accounts, balances, recon) | **done** |
 | 3. SharePoint "Booking Transactions" ingest, tiers from S3 Accounts | **done** |
-| 4. Stripe nightly + date-range backfill | next |
+| 3b. Exposure history (file-dated balances, month-end history, daily movements), nightly risk email, import check | **done** |
+| 3c. HTML dashboard on the API | next |
+| 4. Stripe nightly + date-range backfill | — |
 | 5. Dashboard + JSON API | — |
 | 6. Backup, alerts, runbook | — |
 | Phase 2: risk models (`config/models.yaml`), scores, report | — |
@@ -29,6 +31,8 @@ only on the Synology NAS.
 | `rm/s3.py`, `rm/ingest/s3_reports.py` | S3 listing and streaming, report loaders, derived events and lifetime totals |
 | `bin/rm_admin.py` | `init-db`, `status`, dashboard users, API tokens |
 | `bin/ingest_s3.py` | Nightly S3 load; `--full-refresh` for lifetime history |
+| `rm/risk_interim.py` | Interim exposure + fraud scoring and priority (until phase 2's models.yaml) |
+| `rm/report.py`, `bin/risk_report.py` | Nightly risk email and the Booking Transactions check |
 | `rm/graph.py` | Microsoft Graph: SharePoint list/download/delete/move/upload, alert email |
 | `rm/ingest/sharepoint_transactions.py`, `bin/ingest_sharepoint.py` | Booking Transactions CSV import: latest row per Booking ID + history, declines, hashing |
 | `tests/` | `python3 -m pytest -q` |

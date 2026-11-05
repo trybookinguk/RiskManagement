@@ -224,6 +224,41 @@ def load_balances(conn, source, key: str, snapshot_date: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# AccountMovementDaily -> balance_movements (one row per account per day)
+# ---------------------------------------------------------------------------
+
+MOVEMENT_COLUMNS = {   # export column -> table column
+    "AccountId": "AccountId", "TicketValue": "TicketValue", "Donation": "Donation",
+    "TotalBookingFee": "TotalBookingFee", "TicketRefundedAmount": "TicketRefundedAmount",
+    "DonationRefundedAmount": "DonationRefundedAmount", "Pending": "Pending",
+    "OpeningBalance": "OpeningBalance", "ClosingBalance": "ClosingBalance",
+    "StripeTransfers": "StripeTransfers", "FundTransafer": "FundTransfer", "Recredit": "Recredit",
+    "DebitListing": "DebitListing", "AdditionalDebitBilling": "AdditionalDebitBilling",
+    "AdditionalCreditBilling": "AdditionalCreditBilling",
+}
+
+
+def load_movements(conn, source, key: str, movement_date: str) -> dict:
+    """One daily file (the date comes from its name). Has a gateway preamble line."""
+    read = written = 0
+    for chunk in read_chunks(source, key, list(MOVEMENT_COLUMNS)):
+        _require(chunk, ["AccountId"], key)
+        df = pd.DataFrame({dst: (to_int(chunk[src]) if dst == "AccountId" else to_float(_col(chunk, src)))
+                           for src, dst in MOVEMENT_COLUMNS.items()})
+        df = df[df["AccountId"].notna()]
+        df.insert(1, "MovementDate", movement_date)
+        with conn:
+            written += db.upsert(conn, "balance_movements", _records(df), ["AccountId", "MovementDate"])
+        read += len(chunk)
+    return {"rows_read": read, "rows_written": written}
+
+
+def prune_movements(conn, cutoff: str) -> int:
+    with conn:
+        return conn.execute("DELETE FROM balance_movements WHERE MovementDate < ?", (cutoff,)).rowcount
+
+
+# ---------------------------------------------------------------------------
 # TransactionReconciliation -> gateway_recon (card last 4 guarded)
 # ---------------------------------------------------------------------------
 

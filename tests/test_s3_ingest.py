@@ -99,7 +99,17 @@ def bucket(tmp_path):
         {"BookingTransactionId": 5, "TransactionDate": "2026-11-01 08:05:00", "GatewayId": "ch_5",
          "CardType": "VISA", "CardNo": "4242", "Amount": "-10", "Transaction": "Refund"},
     ], preamble="First Gateway Id,ch_1,Start Booking Transaction Id,1")
+    stamp(root, "2026-11-02 05:00")
     return root
+
+
+def stamp(root, when, *paths):
+    """Set file modified times (UTC) - monthly files are dated by when S3 last wrote them."""
+    import calendar
+    from datetime import datetime
+    t = calendar.timegm(datetime.strptime(when, "%Y-%m-%d %H:%M").timetuple())
+    for p in (paths or pathlib.Path(root).rglob("*.csv")):
+        os.utime(pathlib.Path(root) / p, (t, t))
 
 
 def run(*args, today="2026-11-02"):
@@ -210,8 +220,7 @@ def test_snapshot_gives_exact_event_created(env, bucket):
         booking(5, 2, 20, "2026-11-01 08:00:00", "2026-11-03 20:00:00"),
         booking(6, 2, 21, "2026-11-03 07:00:00", "2026-11-05 20:00:00"),
     ])
-    os.utime(bucket / "2026/11/202611-Accounts-TBUK.csv", (2e9, 2e9))
-    os.utime(bucket / "2026/11/202611-BookingData-TBUK.csv", (2e9, 2e9))
+    stamp(bucket, "2026-11-03 05:00", "2026/11/202611-Accounts-TBUK.csv", "2026/11/202611-BookingData-TBUK.csv")
     assert run("--local-dir", str(bucket), today="2026-11-03") == 0
     conn = open_db()
     ev = {r["EventId"]: dict(r) for r in conn.execute("SELECT * FROM events WHERE AccountId=2")}
@@ -288,3 +297,55 @@ def test_s3_source_with_moto(bucket, monkeypatch):
                                      rep.RECON_COLUMNS))
         assert list(chunks[0]["CardNo"]) == ["************4242", "4242"]
         assert "AccountName" not in chunks[0].columns
+
+
+MOVEMENT_HEADER = ["AccountId", "DateTimeCreated", "AccountName", "TicketValue", "Donation", "TotalBookingFee",
+                   "TicketRefundedAmount", "Pending", "OpeningBalance", "ClosingBalance", "StripeTransfers",
+                   "FundTransafer", "Recredit"]
+
+
+def test_balances_dated_by_file_and_month_end_history(env, bucket, capsys):
+    # Two earlier months' final RiskReports (written early the next month) + one stale current file.
+    write(bucket, "2026/09/202609-RiskReport-TBUK.csv", RISK_HEADER, [{"AccountId": 2, "FullBalance": "100"}])
+    write(bucket, "2026/10/202610-RiskReport-TBUK.csv", RISK_HEADER, [{"AccountId": 2, "FullBalance": "500"}])
+    stamp(bucket, "2026-10-01 03:00", "2026/09/202609-RiskReport-TBUK.csv")
+    stamp(bucket, "2026-11-01 03:00", "2026/10/202610-RiskReport-TBUK.csv")
+    stamp(bucket, "2026-11-01 23:30", "2026/11/202611-RiskReport-TBUK.csv")   # 23:30 UTC = 1 Nov UK (GMT)
+    assert run("--local-dir", str(bucket), "--full-refresh") == 0
+    conn = open_db()
+    rows = conn.execute("SELECT SnapshotDate, FullBalance FROM balances WHERE AccountId=2 ORDER BY 1").fetchall()
+    assert [tuple(r) for r in rows] == [("2026-10-01", 100.0), ("2026-11-01", 1250.5)]
+    conn.close()
+    # Nightly with the current file not refreshed: no row is stamped as today.
+    assert run("--local-dir", str(bucket), "--only", "RiskReport", "--force", today="2026-11-03") == 0
+    conn = open_db()
+    assert conn.execute("SELECT MAX(SnapshotDate) FROM balances").fetchone()[0] == "2026-11-01"
+    conn.close()
+
+
+def test_bst_file_date():
+    from zoneinfo import ZoneInfo
+    spec = importlib.util.spec_from_file_location("ingest_s3", ROOT / "bin" / "ingest_s3.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    tz = ZoneInfo("Europe/London")
+    assert mod.file_date({"Key": "2026/07/202607-RiskReport-TBUK.csv", "LastModified": "2026-07-01 23:30:00"}, tz) \
+        == "2026-07-02"                                                      # BST: 00:30 on 2 July
+    assert mod.file_date({"Key": "2026/07/20260715-AccountMovementDaily-TBUK.csv",
+                          "LastModified": "2026-07-16 02:00:00"}, tz) == "2026-07-15"   # daily: name wins
+
+
+def test_account_movements(env, bucket):
+    write(bucket, "2026/11/20261101-AccountMovementDaily-TBUK.csv", MOVEMENT_HEADER, [
+        {"AccountId": 2, "TicketValue": "250.00", "OpeningBalance": "1000", "ClosingBalance": "1250",
+         "Pending": "50", "StripeTransfers": "0", "FundTransafer": "-500"}],
+        preamble="First Gateway Id,1,Start Booking Transaction Id,1")
+    write(bucket, "2026/11/20261102-AccountMovementDaily-TBUK.csv", MOVEMENT_HEADER, [
+        {"AccountId": 2, "TicketValue": "10", "OpeningBalance": "1250", "ClosingBalance": "1260"}])
+    write(bucket, "2023/01/20230105-AccountMovementDaily-TBUK.csv", MOVEMENT_HEADER, [{"AccountId": 2}])  # too old
+    assert run("--local-dir", str(bucket), "--full-refresh") == 0
+    conn = open_db()
+    rows = conn.execute("SELECT MovementDate, OpeningBalance, ClosingBalance, FundTransfer FROM balance_movements "
+                        "ORDER BY 1").fetchall()
+    assert [tuple(r) for r in rows] == [("2026-11-01", 1000.0, 1250.0, -500.0), ("2026-11-02", 1250.0, 1260.0, None)]
+    conn.close()

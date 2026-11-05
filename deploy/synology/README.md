@@ -90,6 +90,7 @@ Each task is a Task Scheduler **User-defined script**:
 | RiskManagement full refresh | **disabled**, Run by hand once after setup (25–35 min, 2.5–3.5 GB); avoid 02:00–04:00 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh full-refresh` |
 | RiskManagement S3 nightly | daily 04:10 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh ingest-s3` |
 | RiskManagement SharePoint nightly | daily 04:20 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh ingest-sharepoint` |
+| RiskManagement risk report | daily 05:00 (after the imports) | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh report` |
 | RiskManagement update | weekly, e.g. Sunday 03:00, or Run by hand after a merge | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh update` |
 | RiskManagement status | **disabled**, Run by hand | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh status` |
 | RiskManagement command | **disabled**, edit the line, then Run | e.g. `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh add-user henry@trybooking.co.uk admin` |
@@ -126,6 +127,8 @@ added in build steps 4 and 6.
 | `status` | Warehouse size, row counts, last import per source |
 | `test` | Run the test suite inside the container |
 | `ingest-sharepoint [options]` | Import Booking Transactions CSVs from SharePoint. `--dry-run` checks them without storing, moving or deleting anything. |
+| `report [--no-email]` | Nightly risk report, emailed to `REPORT_EMAIL`: what changed (balances, priorities, new accounts and events), the top 10 risk accounts and events, import health, and the Booking Transactions check. It's also saved in **riskmanagement-data → reports**. |
+| `check-transactions` | Booking Transactions import check only: files, match rate to S3 bookings, how each Gateway Message Description is classified, and the Status, CVV and card type values |
 | `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
 | `full-refresh` | One-off lifetime load from BookingDataAll |
 | `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |
