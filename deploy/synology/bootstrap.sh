@@ -38,7 +38,6 @@ LOG_DIR="$DATA_DIR/logs"
 REPO="trybookinguk/RiskManagement"
 SSH_DIR="${SSH_DIR:-/root/.ssh}"
 KEY="$SSH_DIR/riskmanagement_deploy"
-HOST_ALIAS="github-riskmanagement"
 
 say()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 next_step() {      # message for the person, then stop (exit 0: waiting is not a failure)
@@ -59,54 +58,75 @@ command -v docker >/dev/null 2>&1 || die "docker not found - install Container M
 command -v git >/dev/null 2>&1 || die "git not found - install Git Server from Package Center, then Run again"
 
 # 2. Deploy key ---------------------------------------------------------------
+# Everything SSH needs is given on the command line, so an existing
+# /root/.ssh/config (e.g. from earlier manual steps) can't interfere.
+# GitHub's host key is pinned here (published ed25519 key, fingerprint
+# SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU), so there is no
+# "Host key verification failed" and no trust-on-first-use.
 mkdir -p "$SSH_DIR" && chmod 700 "$SSH_DIR"
 if [ ! -f "$KEY" ]; then
   say "Creating a read-only deploy key"
   ssh-keygen -q -t ed25519 -N "" -C "synology-riskmanagement" -f "$KEY" || die "ssh-keygen failed"
 fi
+chmod 600 "$KEY"
 cp "$KEY.pub" "$SETUP_DIR/deploy_key.pub"
-if ! grep -q "Host $HOST_ALIAS" "$SSH_DIR/config" 2>/dev/null; then
-  # Port 443 works even where outbound port 22 is blocked.
-  cat >> "$SSH_DIR/config" <<CFG
 
-Host $HOST_ALIAS
-    HostName ssh.github.com
-    Port 443
-    User git
-    IdentityFile $KEY
-    IdentitiesOnly yes
-    StrictHostKeyChecking accept-new
-CFG
-  chmod 600 "$SSH_DIR/config"
+KNOWN="$SSH_DIR/known_hosts_github"
+GH_ED25519="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+printf '%s\n' "github.com $GH_ED25519" "[ssh.github.com]:443 $GH_ED25519" > "$KNOWN"
+chmod 644 "$KNOWN"
+SSH_CMD="ssh -F /dev/null -i $KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519 -o BatchMode=yes -o ConnectTimeout=20"
+
+# Port 443 first (works where outbound port 22 is blocked), then 22.
+REMOTE=""
+auth=""
+for target in "443 ssh.github.com" "22 github.com"; do
+  set -- $target
+  out=$($SSH_CMD -p "$1" -T "git@$2" 2>&1)
+  auth="$auth
+  port $1: $(echo "$out" | tail -1)"
+  if echo "$out" | grep -q "successfully authenticated"; then
+    REMOTE="ssh://git@$2:$1/$REPO.git"
+    break
+  fi
+done
+if [ -z "$REMOTE" ]; then
+  if echo "$auth" | grep -q "Permission denied"; then
+    next_step \
+      "STEP: add the NAS's deploy key to GitHub (one time)." \
+      "" \
+      "1. In File Station open docker > riskmanagement-data > setup > deploy_key.pub" \
+      "   (right-click > Open with Text Editor) and copy the single line. It is:" \
+      "" \
+      "   $(cat "$KEY.pub")" \
+      "" \
+      "2. On GitHub: $REPO > Settings > Deploy keys > Add deploy key." \
+      "   Title: Synology NAS. Paste the line. Leave 'Allow write access' UNTICKED. Add key." \
+      "   (If a 'Synology NAS' key is already there with a different line, delete it first.)" \
+      "" \
+      "3. Run this task again." \
+      "" \
+      "GitHub said:$auth"
+  fi
+  die "could not reach GitHub over SSH (ports 443 and 22). Check the NAS can reach the internet
+  and that the DSM firewall allows outgoing connections. Details:$auth"
 fi
-auth=$(ssh -T -o BatchMode=yes -o ConnectTimeout=20 "$HOST_ALIAS" 2>&1)
-if ! echo "$auth" | grep -q "successfully authenticated"; then
-  next_step \
-    "STEP: add the NAS's deploy key to GitHub (one time)." \
-    "" \
-    "1. In File Station open docker > riskmanagement-data > setup > deploy_key.pub" \
-    "   (right-click > Open with Text Editor) and copy the single line. It is:" \
-    "" \
-    "   $(cat "$KEY.pub")" \
-    "" \
-    "2. On GitHub: $REPO > Settings > Deploy keys > Add deploy key." \
-    "   Title: Synology NAS. Paste the line. Leave 'Allow write access' UNTICKED. Add key." \
-    "" \
-    "3. Run this task again." \
-    "" \
-    "(GitHub said: $(echo "$auth" | tail -1))"
-fi
-say "GitHub deploy key: OK"
+say "GitHub deploy key: OK ($REMOTE)"
+export GIT_SSH_COMMAND="$SSH_CMD"
 
 # 3. Clone or update --------------------------------------------------------
 if [ -d "$REPO_DIR/.git" ]; then
   say "Repo already cloned - pulling"
+  git -C "$REPO_DIR" remote set-url origin "$REMOTE"
+  git -C "$REPO_DIR" config core.sshCommand "$SSH_CMD"
   git -C "$REPO_DIR" pull --ff-only origin main || die "git pull failed"
 else
   [ -e "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ] \
     && die "$REPO_DIR exists and is not empty - move it aside, then Run again"
   say "Cloning $REPO"
-  git clone "$HOST_ALIAS:$REPO.git" "$REPO_DIR" || die "git clone failed"
+  git clone "$REMOTE" "$REPO_DIR" || die "git clone failed"
+  # Later 'git pull' (rmctl.sh update) uses the same key and pinned host key.
+  git -C "$REPO_DIR" config core.sshCommand "$SSH_CMD"
 fi
 
 # 4. .env ---------------------------------------------------------------------
