@@ -47,9 +47,9 @@ def import_bytes(conn, hasher, data: bytes, name: str, cutoff: str, dry_run: boo
     checksum = hashlib.sha256(data).hexdigest()
     if db.already_imported(conn, SOURCE, checksum):
         return {"duplicate": True, "checksum": checksum}
-    df = bt.parse(data, hasher)
+    df = bt.parse(data, hasher, name)
     if dry_run:
-        return {"duplicate": False, "rows_read": len(df), "rows_written": 0, "bookings": df["BookingId"].nunique(),
+        return {"duplicate": False, "rows_read": len(df), "rows_written": 0, "bookings": df["BookingGuid"].nunique(), "date_order": df.attrs.get("date_order"),
                 "declines": int(sum(1 for v in df["IsDecline"] if v == 1)), "checksum": checksum}
     run_id = db.start_import(conn, SOURCE, name, checksum)
     try:
@@ -61,7 +61,7 @@ def import_bytes(conn, hasher, data: bytes, name: str, cutoff: str, dry_run: boo
         raise
     db.finish_import(conn, run_id, "ok", stats["rows_read"], stats["rows_written"],
                      f"{stats['bookings']} bookings, {stats['new_versions']} new versions, {stats['declines']} declines")
-    stats.update(duplicate=False, checksum=checksum)
+    stats.update(duplicate=False, checksum=checksum, date_order=df.attrs.get("date_order"))
     return stats
 
 
@@ -162,7 +162,8 @@ def main(argv=None, graph=None) -> int:
                 print(f"  = {name}: already imported - deleting the copy")
             else:
                 imported += 1
-                print(f"  + {name}: {s['rows_read']:,} rows, {s['bookings']:,} bookings, {s['declines']:,} declines"
+                print(f"  + {name}: {s['rows_read']:,} rows, {s['bookings']:,} bookings, {s['declines']:,} declines, "
+                      f"dates read as {'day/month' if s.get('date_order') == 'dmy' else 'month/day'}/year"
                       + (" (dry run - not stored, not deleted)" if args.dry_run else
                          f"; {s['new_versions']:,} new versions, {s['rows_written']:,} latest rows updated"))
             if not args.dry_run:

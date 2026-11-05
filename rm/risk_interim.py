@@ -164,26 +164,26 @@ def _ip_share(conn, event_ids, uk, sample):
 
 
 def transaction_event_map(conn):
-    """Map SharePoint transaction rows to events: by Booking ID, else by unique
-    (event name, organiser name). Returns SQL for a temp table _txn_event(BookingId, EventId, How)."""
+    """Map SharePoint transaction rows to events: by booking GUID (S3 BookingUrlId), else by a
+    unique (event name, organiser name). Fills temp table _txn_event(BookingGuid, EventId, How)."""
     conn.execute("DROP TABLE IF EXISTS temp._txn_event")
     conn.execute("""
         CREATE TEMP TABLE _txn_event AS
-        WITH ids AS (SELECT DISTINCT BookingId FROM booking_transaction_history),
-             by_booking AS (SELECT BookingId, MAX(EventId) AS EventId FROM bookings
-                            WHERE BookingId IN (SELECT BookingId FROM ids) GROUP BY BookingId),
+        WITH ids AS (SELECT DISTINCT BookingGuid FROM booking_transaction_history),
+             by_guid AS (SELECT BookingUrlId AS BookingGuid, MAX(EventId) AS EventId FROM bookings
+                         WHERE BookingUrlId IN (SELECT BookingGuid FROM ids) GROUP BY BookingUrlId),
              names AS (SELECT LOWER(TRIM(n.EventName)) AS ev, LOWER(TRIM(a.AccountName)) AS org,
                               MIN(n.EventId) AS EventId, COUNT(*) AS n
                        FROM event_names n JOIN accounts a ON a.AccountId = n.AccountId GROUP BY 1, 2),
-             latest AS (SELECT BookingId, LOWER(TRIM(EventName)) AS ev, LOWER(TRIM(EventOrganiser)) AS org
+             latest AS (SELECT BookingGuid, LOWER(TRIM(EventName)) AS ev, LOWER(TRIM(EventOrganiser)) AS org
                         FROM booking_transactions)
-        SELECT i.BookingId,
-               COALESCE(bb.EventId, CASE WHEN nm.n = 1 THEN nm.EventId END) AS EventId,
-               CASE WHEN bb.EventId IS NOT NULL THEN 'booking_id'
+        SELECT i.BookingGuid,
+               COALESCE(bg.EventId, CASE WHEN nm.n = 1 THEN nm.EventId END) AS EventId,
+               CASE WHEN bg.EventId IS NOT NULL THEN 'booking_guid'
                     WHEN nm.n = 1 THEN 'event_name' ELSE 'unmatched' END AS How
         FROM ids i
-        LEFT JOIN by_booking bb ON bb.BookingId = i.BookingId
-        LEFT JOIN latest l ON l.BookingId = i.BookingId
+        LEFT JOIN by_guid bg ON bg.BookingGuid = i.BookingGuid
+        LEFT JOIN latest l ON l.BookingGuid = i.BookingGuid
         LEFT JOIN names nm ON nm.ev = l.ev AND nm.org = l.org""")
 
 
@@ -191,7 +191,7 @@ def _declines(conn, since: str):
     transaction_event_map(conn)
     rows = conn.execute("""
         SELECT m.EventId, COUNT(*) AS attempts, SUM(CASE WHEN h.IsDecline = 1 THEN 1 ELSE 0 END) AS declines
-        FROM booking_transaction_history h JOIN temp._txn_event m ON m.BookingId = h.BookingId
+        FROM booking_transaction_history h JOIN temp._txn_event m ON m.BookingGuid = h.BookingGuid
         WHERE m.EventId IS NOT NULL AND h.TransactionDate >= ?
         GROUP BY m.EventId""", (since,)).fetchall()
     return {r["EventId"]: (r["attempts"], r["declines"]) for r in rows}

@@ -44,10 +44,15 @@ def write(root, key, header, rows, preamble=None):
     return key
 
 
+def guid(n) -> str:
+    """Booking GUID for test booking n (S3 BookingUrlId / export Booking ID)."""
+    return f"00000000-0000-4000-8000-{int(n):012d}"
+
+
 def booking(bt, acct, ev, txn, evdate, **kw):
     return {"BookingId": bt + 100000, "BookingTransactionId": bt, "AccountId": acct, "EventId": ev,
             "EventName": f"Event {ev}", "TransactionDate": txn, "EventDate": evdate,
-            "BookingUrlId": f"guid-{bt}", "PaymentReceived": "10.00", "TicketQuantity": "2",
+            "BookingUrlId": guid(bt).upper(), "PaymentReceived": "10.00", "TicketQuantity": "2",
             "Status": "Success", "TransactionType": "Online", "PaymentType": "Card",
             "IPCountry": kw.get("ip_country", "GB"), "IPAddress": kw.get("ip", "81.2.69.160"),
             "BookingCountryCode": "GBR", "EventPostcode": "SW1A 1AA", "GatewayName": "Stripe",
@@ -169,6 +174,7 @@ def test_full_refresh_then_nightly(env, bucket, capsys):
     assert b[3]["Status"] == "Refunded"                       # later monthly file wins
     assert b[2]["TransactionDate"] == "2025-06-01 12:00:00"
     assert b[1]["EventPostcodeOutward"] == "SW1A"
+    assert b[1]["BookingUrlId"] == guid(1)                      # upper-case export -> canonical lower case
     assert b[1]["IPHash"] and len(b[1]["IPHash"]) == 32 and "81.2" not in b[1]["IPHash"]
     assert b[1]["IPHash"] == b[2]["IPHash"] != b[3]["IPHash"]
 

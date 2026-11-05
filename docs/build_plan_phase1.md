@@ -397,3 +397,22 @@ so it can never change the warehouse. It serves two things:
 - **Transactions to events.** SharePoint transactions map to events by
   Booking ID, otherwise by a unique (event name, organiser) pair. The import
   check reports the split.
+
+## 12. Booking Transactions export: what the real file showed (2026-11-05)
+
+- **Booking ID is the booking GUID**, e.g. `caded601-55c4-…`, the same value
+  as S3 `BookingUrlId`. Schema v5 keys `booking_transactions` and its
+  history on `BookingGuid`. GUIDs are stored in one form everywhere (lower
+  case with dashes) and transactions link to bookings and events through
+  `bookings.BookingUrlId`. A unique (event name, organiser) pair is the
+  fallback.
+- **Transaction Date is month-first**: `11/03/2026 11:04:26` is 3 Nov 2026
+  in `3_Nov_26_BookingTransactionsReport.csv`. The order is decided per
+  file:
+  - a first number over 12 means day-first
+  - a second number over 12 means month-first
+  - otherwise the date in the file name decides, then month-first
+
+  The import prints the order it used.
+- **Status `Unknown`** rows have no Gateway ID; they look like abandoned
+  attempts. They're left unclassified rather than counted as declines.

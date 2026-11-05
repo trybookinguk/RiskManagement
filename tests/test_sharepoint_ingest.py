@@ -8,6 +8,7 @@ import pytest
 from rm import config, db
 from rm.graph import Graph, GraphError
 from rm.ingest import sharepoint_transactions as bt
+from test_s3_ingest import guid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HEADER = ["Transaction Date", "Gateway ID", "Booking ID", "Merchant Ref ID", "Card Type", "Card Number", "Cvv Check",
@@ -18,7 +19,8 @@ FOLDER = "Platform Data/Booking Transactions"
 
 
 def row(bid, when, desc="Approved", status="Success", card="************4242", email="jane@example.com", **kw):
-    r = {"Transaction Date": when, "Gateway ID": f"ch_{bid}", "Booking ID": bid, "Merchant Ref ID": f"guid-{bid}",
+    r = {"Transaction Date": when, "Gateway ID": f"ch_{bid}", "Booking ID": guid(bid) if isinstance(bid, int) else bid,
+         "Merchant Ref ID": f"ref{bid}",
          "Card Type": "VISA", "Card Number": card, "Cvv Check": "pass", "Amount": "25.00", "Transaction": "Payment",
          "Event Organiser": "Theatre Co", "Event Name": "Gala", "Gateway Message": "00",
          "Gateway Message Description": desc, "Status": status, "Booking First Name": "Jane",
@@ -108,8 +110,8 @@ def hasher():
 
 def test_parse_maps_hashes_and_flags(hasher):
     df = bt.parse(to_csv([row(1, "2026-11-01 10:00:00"),
-                          row(2, "01/11/2026 11:00", desc="Do Not Honour", status="Declined", card="1111")]), hasher)
-    r = df.set_index("BookingId").to_dict("index")
+                          row(2, "11/01/2026 11:00", desc="Do Not Honour", status="Declined", card="1111")]), hasher)
+    r = {int(k[-12:]): v for k, v in df.set_index("BookingGuid").to_dict("index").items()}
     assert r[1]["CardLast4"] == "4242" and r[2]["CardLast4"] == "1111"
     assert r[1]["IsDecline"] == 0 and r[2]["IsDecline"] == 1
     assert r[2]["TransactionDate"] == "2026-11-01 11:00:00"
@@ -123,7 +125,7 @@ def test_parse_maps_hashes_and_flags(hasher):
 def test_parse_tolerates_header_spelling(hasher):
     header = [h.upper().replace(" ", "_") for h in HEADER]
     rows = [{h.upper().replace(" ", "_"): v for h, v in row(5, "2026-11-01").items()}]
-    assert bt.parse(to_csv(rows, header), hasher)["BookingId"].tolist() == [5]
+    assert bt.parse(to_csv(rows, header), hasher)["BookingGuid"].tolist() == [guid(5)]
 
 
 def test_parse_cp1252_and_crlf(hasher):
@@ -135,7 +137,8 @@ def test_parse_cp1252_and_crlf(hasher):
     (b"", "empty"),
     (b"Booking ID,Amount\n1,2\n", "missing required column"),
     (to_csv([]), "no rows"),
-    (to_csv([row("abc", "2026-11-01")]), "not a number"),
+    (to_csv([row(1, "31st of Nov")]), "'Transaction Date' not recognised on row(s) 2 (format 99aa aa Aaa)"),
+    (to_csv([row("", "2026-11-01")]), "no rows have a Booking ID"),
 ])
 def test_parse_rejects(hasher, data, reason):
     with pytest.raises(bt.FileRejected) as e:
@@ -200,7 +203,7 @@ def test_bad_file_moved_to_failed_with_note_and_alert(env):
     assert "last 4 digits" in note and "4111" not in note
     assert len(g.mail) == 1 and "bad.csv" in g.mail[0][2] and "4111" not in g.mail[0][2]
     conn = open_db()
-    assert [r[0] for r in conn.execute("SELECT BookingId FROM booking_transactions")] == [1]
+    assert [r[0] for r in conn.execute("SELECT BookingGuid FROM booking_transactions")] == [guid(1)]
     conn.close()
 
 
@@ -211,17 +214,17 @@ def test_newer_row_wins_across_files_and_history_keeps_decline(env):
     older = to_csv([row(7, "2026-10-31 09:00", desc="Card expired", status="Declined")])
     assert run(FakeGraph({"late.csv": older})) == 0
     conn = open_db()
-    latest = conn.execute("SELECT Status, TransactionDate FROM booking_transactions WHERE BookingId=7").fetchone()
+    latest = conn.execute("SELECT Status, TransactionDate FROM booking_transactions WHERE BookingGuid=?", (guid(7),)).fetchone()
     assert tuple(latest) == ("Success", "2026-11-01 10:05:00")        # older file didn't overwrite
-    hist = conn.execute("SELECT IsDecline FROM booking_transaction_history WHERE BookingId=7 "
-                        "ORDER BY TransactionDate").fetchall()
+    hist = conn.execute("SELECT IsDecline FROM booking_transaction_history WHERE BookingGuid=? "
+                        "ORDER BY TransactionDate", (guid(7),)).fetchall()
     assert [r[0] for r in hist] == [1, 1, 0]
-    first_seen = conn.execute("SELECT FirstSeenAt FROM booking_transactions WHERE BookingId=7").fetchone()[0]
+    first_seen = conn.execute("SELECT FirstSeenAt FROM booking_transactions WHERE BookingGuid=?", (guid(7),)).fetchone()[0]
     conn.close()
     newer = to_csv([row(7, "2026-11-02 08:00", desc="Approved", status="Refunded")])
     assert run(FakeGraph({"day2.csv": newer})) == 0
     conn = open_db()
-    r = conn.execute("SELECT Status, FirstSeenAt FROM booking_transactions WHERE BookingId=7").fetchone()
+    r = conn.execute("SELECT Status, FirstSeenAt FROM booking_transactions WHERE BookingGuid=?", (guid(7),)).fetchone()
     assert (r[0], r[1]) == ("Refunded", first_seen)                   # FirstSeenAt kept
     conn.close()
 
@@ -230,8 +233,8 @@ def test_retention_prunes_old_rows(env):
     g = FakeGraph({"x.csv": to_csv([row(1, "2023-01-01 10:00"), row(2, "2026-11-01 10:00")])})
     assert run(g) == 0
     conn = open_db()
-    assert [r[0] for r in conn.execute("SELECT BookingId FROM booking_transactions")] == [2]
-    assert [r[0] for r in conn.execute("SELECT BookingId FROM booking_transaction_history")] == [2]
+    assert [r[0] for r in conn.execute("SELECT BookingGuid FROM booking_transactions")] == [guid(2)]
+    assert [r[0] for r in conn.execute("SELECT BookingGuid FROM booking_transaction_history")] == [guid(2)]
     conn.close()
 
 
@@ -261,7 +264,7 @@ def test_local_file_option(env, tmp_path):
     assert run(None, "--file", str(f)) == 0
     assert f.exists()                                                 # local file left alone
     conn = open_db()
-    assert conn.execute("SELECT BookingId FROM booking_transactions").fetchone()[0] == 3
+    assert conn.execute("SELECT BookingGuid FROM booking_transactions").fetchone()[0] == guid(3)
     conn.close()
 
 
@@ -328,3 +331,56 @@ def test_graph_move_delete_mail_shapes():
     msg = s.calls[2][2]["json"]["message"]
     assert [r["emailAddress"]["address"] for r in msg["toRecipients"]] == ["henry@x.com", "kathryn@x.com"]
     assert s.calls[2][1].endswith("/users/reports%40x.com/sendMail")
+
+
+# ------------------------------------------------------------ dates & GUIDs ---
+
+@pytest.mark.parametrize("values,name,expected", [
+    (["11/03/2026 11:04:26", "11/03/2026 10:00:00"], "3_Nov_26_BookingTransactionsReport.csv", "mdy"),  # real export
+    (["11/03/2026 11:04:26"], "11_Mar_26_BookingTransactionsReport.csv", "dmy"),
+    (["13/03/2026 11:04"], None, "dmy"),
+    (["03/13/2026 11:04"], None, "mdy"),
+    (["11/03/2026 11:04"], None, "mdy"),                       # ambiguous, no hint: export's own format
+    (["2026-11-03 11:04:26"], None, "mdy"),
+])
+def test_date_order(values, name, expected):
+    assert bt.date_order(values, name) == expected
+
+
+def test_real_export_shape(hasher):
+    """Matches the 3 Nov 2026 export: GUID Booking IDs, month-first dates, blank gateway on 'Unknown'."""
+    rows = [row(None, "11/03/2026 11:04:26", desc="", status="Unknown", **{"Booking ID": "CADED601-55C4-4FF5-B40F-ADD2310ABB4A",
+                                                                         "Gateway ID": ""}),
+            row(None, "11/03/2026 11:04:13", desc="", status="Successful",
+                **{"Booking ID": "7bb5116e-10ee-4e78-8620-643f9017a380", "Gateway ID": "ch_3UXfVhBaEv2VOwPO0lKvopaQ"})]
+    df = bt.parse(to_csv(rows), hasher, "3_Nov_26_BookingTransactionsReport.csv")
+    r = df.set_index("BookingGuid").to_dict("index")
+    a = r["caded601-55c4-4ff5-b40f-add2310abb4a"]
+    b = r["7bb5116e-10ee-4e78-8620-643f9017a380"]
+    assert a["TransactionDate"] == "2026-11-03 11:04:26" and a["GatewayId"] is None and a["IsDecline"] is None
+    assert b["IsDecline"] == 0 and b["GatewayId"] == "ch_3UXfVhBaEv2VOwPO0lKvopaQ"
+    assert df.attrs["date_order"] == "mdy"
+
+
+def test_shape():
+    assert bt.shape("AB12-cd") == "AA99-aa"
+
+
+def test_transactions_link_to_s3_bookings_by_guid(env, tmp_path):
+    """Export GUIDs (any case) match S3 BookingUrlId (stored canonical) -> events."""
+    from rm.ingest import s3_reports  # noqa: F401
+    from rm import risk_interim
+    conn = open_db() if False else None
+    s = config.get_settings()
+    conn = db.connect(s.risk_db)
+    db.init_db(conn, s.risk_passphrase)
+    with conn:
+        conn.execute("INSERT INTO bookings(BookingTransactionId, BookingUrlId, AccountId, EventId) VALUES (1, ?, 9, 90)",
+                     (guid(42),))
+    conn.close()
+    assert run(FakeGraph({"t.csv": to_csv([row(None, "2026-11-01 10:00", **{"Booking ID": guid(42).upper()})])})) == 0
+    conn = db.connect(s.risk_db)
+    risk_interim.transaction_event_map(conn)
+    assert [tuple(r) for r in conn.execute("SELECT BookingGuid, EventId, How FROM temp._txn_event")] == \
+        [(guid(42), 90, "booking_guid")]
+    conn.close()

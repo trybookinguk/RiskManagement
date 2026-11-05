@@ -23,10 +23,10 @@ def loaded(env, bucket):
     """S3 fixture (account 2: created 28 Oct, event 20 created 28 Oct, first session 3 Nov) +
     SharePoint attempts on event 20's bookings: 2 approved, 3 declined (plus an unknown message)."""
     assert run_s3("--local-dir", str(bucket), "--full-refresh") == 0
-    sp = to_csv([row(100004, "2026-10-29 08:00"), row(100005, "2026-11-01 08:00"),
-                 row(100004, "2026-10-29 07:58", desc="Insufficient funds", status="Declined"),
-                 row(100005, "2026-11-01 07:50", desc="Do Not Honour", status="Declined", email="x@spam.example"),
-                 row(100005, "2026-11-01 07:55", desc="Card expired", status="Declined"),
+    sp = to_csv([row(4, "2026-10-29 08:00"), row(5, "2026-11-01 08:00"),
+                 row(4, "2026-10-29 07:58", desc="Insufficient funds", status="Declined"),
+                 row(5, "2026-11-01 07:50", desc="Do Not Honour", status="Declined", email="x@spam.example"),
+                 row(5, "2026-11-01 07:55", desc="Card expired", status="Declined"),
                  row(999999, "2026-11-01 07:00", desc="Gateway hiccup 42", status="Pending",
                      **{"Event Name": "Event 20", "Event Organiser": "New Promoter"})])
     assert run_sp(FakeGraph({"t.csv": sp}), today="2026-11-02") == 0
@@ -93,7 +93,7 @@ def test_check_transactions_command(loaded, capsys):
     assert run_report("--check-transactions") == 0
     out = capsys.readouterr().out
     assert "Booking Transactions import check" in out
-    assert "booking_id" in out and "event_name" in out
+    assert "booking_guid" in out and "event_name" in out
     assert "UNCLASSIFIED" in out and "Gateway hiccup 42" in out
     assert "jane@example.com" not in out
 

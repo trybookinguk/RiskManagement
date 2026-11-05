@@ -1,7 +1,8 @@
 """Booking Transactions CSV (SharePoint "Platform Data/Booking Transactions").
 
 One CSV row per payment attempt. The warehouse keeps:
-    booking_transactions          the latest row per Booking ID
+    booking_transactions          the latest row per booking (the export's
+                                  "Booking ID" is the booking GUID = S3 BookingUrlId)
     booking_transaction_history   every distinct version of a row, so a decline
                                   followed by a successful payment on the same
                                   Booking ID keeps both
@@ -22,13 +23,15 @@ import re
 import pandas as pd
 
 from .. import crypto, db
-from ..s3 import text, to_bool, to_float, to_int, to_iso
+from datetime import date, datetime
+
+from ..s3 import canonical_guid, text, to_bool, to_float, to_int, to_iso
 
 # Export column -> internal name. Matching ignores case, spaces and punctuation.
 COLUMNS = {
     "Transaction Date": "TransactionDate",
     "Gateway ID": "GatewayId",
-    "Booking ID": "BookingId",
+    "Booking ID": "BookingGuid",
     "Merchant Ref ID": "MerchantRefId",
     "Card Type": "CardType",
     "Card Number": "CardNumber",
@@ -83,8 +86,8 @@ def read_csv(data: bytes) -> pd.DataFrame:
 
 
 def is_decline(description, status):
-    desc = (description or "").strip()
-    st = (status or "").strip()
+    desc = description.strip() if isinstance(description, str) else ""
+    st = status.strip() if isinstance(status, str) else ""
     if _DECLINE.search(desc) or re.search(r"declin|fail|refus|reject|error", st, re.I):
         return 1
     if _APPROVED.search(desc) or re.search(r"approv|success|complete|paid", st, re.I):
@@ -97,7 +100,63 @@ def _row_hash(values: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
-def parse(data: bytes, hasher) -> pd.DataFrame:
+_NUM_DATE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})")
+_NAME_DATE = re.compile(r"(\d{1,2})[_\- ]([A-Za-z]{3})[A-Za-z]*[_\- ](\d{2,4})")
+
+
+def shape(value) -> str:
+    """'AB12-x' -> 'AA99-a': shows a value's format without its content."""
+    out = re.sub(r"[A-Z]", "A", re.sub(r"[a-z]", "a", re.sub(r"[0-9]", "9", str(value))))
+    return out[:40]
+
+
+def date_from_name(filename):
+    """3_Nov_26_BookingTransactionsReport.csv -> date(2026, 11, 3), else None."""
+    m = _NAME_DATE.search(filename or "")
+    if not m:
+        return None
+    d, mon, y = m.groups()
+    y = int(y) + (2000 if len(y) == 2 else 0)
+    try:
+        return datetime.strptime(f"{int(d)} {mon[:3].title()} {y}", "%d %b %Y").date()
+    except ValueError:
+        return None
+
+
+def date_order(values, filename=None) -> str:
+    """'dmy' or 'mdy' for n/n/YYYY dates in this file.
+
+    A first number over 12 means day-first; a second number over 12 means
+    month-first. If every date is ambiguous, the date in the file name decides
+    (the reading closest to it, not after it); otherwise month-first, which is
+    how the Booking Transactions export writes dates (3 Nov 2026 = 11/03/2026).
+    """
+    pairs = [(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+             for m in (_NUM_DATE.match(str(v)) for v in values if v) if m]
+    if not pairs:
+        return "mdy"
+    if any(a > 12 for a, b, _ in pairs):
+        return "dmy"
+    if any(b > 12 for a, b, _ in pairs):
+        return "mdy"
+    hint = date_from_name(filename)
+    if hint:
+        def gap(order):
+            best = None
+            for a, b, y in pairs:
+                try:
+                    d = date(y, b, a) if order == "dmy" else date(y, a, b)
+                except ValueError:
+                    return 10 ** 6
+                g = (hint - d).days
+                g = 10 ** 5 + abs(g) if g < -1 else abs(g)       # dates after the file date are unlikely
+                best = g if best is None else min(best, g)
+            return best
+        return "dmy" if gap("dmy") < gap("mdy") else "mdy"
+    return "mdy"
+
+
+def parse(data: bytes, hasher, filename: str = None) -> pd.DataFrame:
     """Validate and transform one export. Raises FileRejected with a safe reason."""
     raw = read_csv(data)
     raw.columns = [str(c).replace("﻿", "").strip() for c in raw.columns]
@@ -123,9 +182,10 @@ def parse(data: bytes, hasher) -> pd.DataFrame:
                                "The whole file was rejected and nothing was stored. "
                                "Re-export with masked card numbers.") from None
 
+    order = date_order(text(col("TransactionDate")).dropna().tolist(), filename)
     out = pd.DataFrame({
-        "BookingId": to_int(col("BookingId")),
-        "TransactionDate": to_iso(col("TransactionDate")),
+        "BookingGuid": col("BookingGuid").map(canonical_guid),
+        "TransactionDate": to_iso(col("TransactionDate"), dayfirst=(order == "dmy")),
         "GatewayId": text(col("GatewayId")),
         "MerchantRefId": text(col("MerchantRefId")),
         "CardType": text(col("CardType")),
@@ -146,13 +206,15 @@ def parse(data: bytes, hasher) -> pd.DataFrame:
         "WaitTime": text(col("WaitTime")),
         "StartingPosition": to_int(col("StartingPosition")),
     })
-    bad_ids = out["BookingId"].isna() & text(col("BookingId")).notna()
-    if bad_ids.any():
-        rows = ", ".join(str(i + 2) for i in list(out.index[bad_ids])[:5])
-        raise FileRejected(f"'Booking ID' is not a number on row(s) {rows}")
-    out = out[out["BookingId"].notna()].copy()
+    bad_dates = out["TransactionDate"].isna() & text(col("TransactionDate")).notna()
+    if bad_dates.any():
+        i = list(out.index[bad_dates])[:5]
+        raise FileRejected(f"'Transaction Date' not recognised on row(s) {', '.join(str(x + 2) for x in i)} "
+                           f"(format {shape(df.loc[i[0], 'TransactionDate'])})")
+    out = out[out["BookingGuid"].notna()].copy()
     if out.empty:
         raise FileRejected("no rows have a Booking ID")
+    out.attrs["date_order"] = order
     out["IsDecline"] = [is_decline(d, s) for d, s in zip(out["GatewayMessageDescription"], out["Status"])]
     out = out.astype(object).where(out.notna(), None)
     out["RowHash"] = [_row_hash(r) for r in out.to_dict("records")]
@@ -160,12 +222,12 @@ def parse(data: bytes, hasher) -> pd.DataFrame:
     return out
 
 
-_LATEST_COLS = ["BookingId", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4", "CvvCheck",
+_LATEST_COLS = ["BookingGuid", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4", "CvvCheck",
                 "Amount", "TransactionType", "EventOrganiser", "EventName", "GatewayMessage",
                 "GatewayMessageDescription", "IsDecline", "Status", "FirstNameHash", "LastNameHash", "EmailHash",
                 "PhoneHash", "WaitedInQueue", "WaitTime", "StartingPosition", "RowHash", "SourceFile",
                 "FirstSeenAt", "UpdatedAt"]
-_HISTORY_COLS = ["BookingId", "RowHash", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4",
+_HISTORY_COLS = ["BookingGuid", "RowHash", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4",
                  "CvvCheck", "Amount", "TransactionType", "GatewayMessage", "GatewayMessageDescription", "IsDecline",
                  "Status", "EmailHash", "PhoneHash", "SourceFile", "ImportedAt"]
 
@@ -186,16 +248,16 @@ def store(conn, df: pd.DataFrame, source_file: str) -> dict:
     hist = [tuple(r[c] for c in _HISTORY_COLS) for r in df.to_dict("records")]
     before = conn.total_changes
     conn.executemany(f"INSERT INTO booking_transaction_history ({', '.join(_HISTORY_COLS)}) "
-                     f"VALUES ({', '.join('?' * len(_HISTORY_COLS))}) ON CONFLICT (BookingId, RowHash) DO NOTHING",
+                     f"VALUES ({', '.join('?' * len(_HISTORY_COLS))}) ON CONFLICT (BookingGuid, RowHash) DO NOTHING",
                      hist)
     new_versions = conn.total_changes - before
 
     latest = (df.assign(_d=df["TransactionDate"].fillna(""))
-                .sort_values(["BookingId", "_d", "_order"])
-                .drop_duplicates("BookingId", keep="last"))
-    upd = [c for c in _LATEST_COLS if c not in ("BookingId", "FirstSeenAt")]
+                .sort_values(["BookingGuid", "_d", "_order"])
+                .drop_duplicates("BookingGuid", keep="last"))
+    upd = [c for c in _LATEST_COLS if c not in ("BookingGuid", "FirstSeenAt")]
     sql = (f"INSERT INTO booking_transactions ({', '.join(_LATEST_COLS)}) VALUES ({', '.join('?' * len(_LATEST_COLS))}) "
-           f"ON CONFLICT (BookingId) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in upd)} "
+           f"ON CONFLICT (BookingGuid) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in upd)} "
            f"WHERE COALESCE(excluded.TransactionDate, '') >= COALESCE(booking_transactions.TransactionDate, '')")
     before = conn.total_changes
     conn.executemany(sql, [tuple(r[c] for c in _LATEST_COLS) for r in latest.to_dict("records")])
