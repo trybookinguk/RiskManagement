@@ -13,8 +13,8 @@ only on the Synology NAS.
 | --- | --- |
 | 1. Skeleton: config, warehouse schema, hashing, admin tool, Docker | **done** |
 | 2. S3 ingest (bookings lifetime, accounts, balances, recon) | **done** |
-| 3. SharePoint "Booking Transactions" ingest | next |
-| 4. Stripe nightly + date-range backfill | — |
+| 3. SharePoint "Booking Transactions" ingest, tiers from S3 Accounts | **done** |
+| 4. Stripe nightly + date-range backfill | next |
 | 5. Dashboard + JSON API | — |
 | 6. Backup, alerts, runbook | — |
 | Phase 2: risk models (`config/models.yaml`), scores, report | — |
@@ -29,6 +29,8 @@ only on the Synology NAS.
 | `rm/s3.py`, `rm/ingest/s3_reports.py` | S3 listing and streaming, report loaders, derived events and lifetime totals |
 | `bin/rm_admin.py` | `init-db`, `status`, dashboard users, API tokens |
 | `bin/ingest_s3.py` | Nightly S3 load; `--full-refresh` for lifetime history |
+| `rm/graph.py` | Microsoft Graph: SharePoint list/download/delete/move/upload, alert email |
+| `rm/ingest/sharepoint_transactions.py`, `bin/ingest_sharepoint.py` | Booking Transactions CSV import: latest row per Booking ID + history, declines, hashing |
 | `tests/` | `python3 -m pytest -q` |
 | `deploy/synology/` | Dockerfile, docker-compose, `bootstrap.sh` + `rmctl.sh` (no-SSH setup and tasks via DSM Task Scheduler), NAS runbook |
 | `legacy/` | The previous fraud report, which still depends on s3reporting. Replaced in phase 2. |

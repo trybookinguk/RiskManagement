@@ -21,7 +21,8 @@ BOOKING_HEADER = ["BookingId", "BookingTransactionId", "AccountId", "AccountName
                   "GiftCertificateTypeName", "GiftCertificateId", "BookingCountryCode", "IPAddress"]
 ACCOUNT_HEADER = ["Id", "AccountName", "AccountStatus", "DateTimeCreated", "IsVerified", "BankAccountIsDeleted",
                   "BankAccountName", "BSB", "AccNumber", "BankAccountStatusId", "LastLogIn", "FirstEventCreation",
-                  "LastEventCreation", "Industry", "SubIndustry", "GatewayGroup", "State", "Postcode", "Country"]
+                  "LastEventCreation", "Industry", "SubIndustry", "GatewayGroup", "TierSystem", "PreviousTier",
+                  "State", "Postcode", "Country"]
 USER_HEADER = ["UserId", "RoleId", "RoleName", "Username", "FirstName", "LastName", "IsDeleted", "AccountId",
                "Unsubscribed", "LastLoginDatetime"]
 RISK_HEADER = ["AccountId", "AccountName", "FullBalance", "Balance", "SalesForUpcomingEvents", "Exposure",
@@ -76,7 +77,8 @@ def bucket(tmp_path):
     write(root, "2026/11/202611-Accounts-TBUK.csv", ACCOUNT_HEADER, [
         {"Id": 1, "AccountName": "Old Theatre", "AccountStatus": "Active", "DateTimeCreated": "2023-12-01 09:00:00",
          "IsVerified": "1", "FirstEventCreation": "2023-12-20 10:00:00", "LastEventCreation": "2025-05-20 10:00:00",
-         "BSB": "123456", "AccNumber": "12345678", "Postcode": "M1 1AE", "Country": "GB"},
+         "BSB": "123456", "AccNumber": "12345678", "Postcode": "M1 1AE", "Country": "GB",
+         "TierSystem": "Tier 2", "PreviousTier": "Tier 3"},
         {"Id": 2, "AccountName": "New Promoter", "AccountStatus": "Active", "DateTimeCreated": "28/10/2026 09:00",
          "IsVerified": "0", "FirstEventCreation": "2026-10-28 15:00:00", "LastEventCreation": "2026-10-28 15:00:00",
          "Postcode": "not a postcode"},
@@ -164,6 +166,9 @@ def test_full_refresh_then_nightly(env, bucket, capsys):
     assert a[2]["DateTimeCreated"] == "2026-10-28 09:00:00"   # UK d/m/Y parsed
     assert a[1]["PostcodeOutward"] == "M1" and a[2]["PostcodeOutward"] is None
     assert "BSB" not in a[1] and "AccNumber" not in a[1]       # bank details never loaded
+    assert (a[1]["TierSystem"], a[1]["PreviousTier"]) == ("Tier 2", "Tier 3")
+    t = conn.execute("SELECT AccountId, Tier, SnapshotDate FROM account_tiers").fetchall()
+    assert [tuple(r) for r in t] == [(1, "Tier 2", "2026-11-02")]          # account 2 has no tier
 
     u = conn.execute("SELECT * FROM users").fetchone()
     assert u["UsernameHash"] and "@" not in u["UsernameHash"]
