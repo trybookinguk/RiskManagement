@@ -16,7 +16,7 @@ from collections import defaultdict
 import pandas as pd
 
 from .. import crypto, db
-from ..s3 import read_chunks, text, to_bool, to_float, to_int, to_iso
+from ..s3 import canonical_guid, read_chunks, text, to_bool, to_float, to_int, to_iso
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def booking_rows(chunk: pd.DataFrame, ip_hash, key: str = "") -> list:
     out = pd.DataFrame({
         "BookingTransactionId": to_int(chunk["BookingTransactionId"]),
         "BookingId": to_int(_col(chunk, "BookingId")),
-        "BookingUrlId": text(_col(chunk, "BookingUrlId")),
+        "BookingUrlId": _col(chunk, "BookingUrlId").map(canonical_guid),
         "AccountId": to_int(chunk["AccountId"]),
         "EventId": to_int(chunk["EventId"]),
         "TransactionDate": to_iso(_col(chunk, "TransactionDate")),
@@ -278,7 +278,7 @@ def load_recon(conn, source, key: str, cutoff: str) -> dict:
             "GatewayId": text(_col(chunk, "GatewayId")).fillna(""),
             "TxnType": text(_col(chunk, "Transaction")).fillna(""),
             "TransactionDate": to_iso(_col(chunk, "TransactionDate")),
-            "BookingUrlId": text(_col(chunk, "BookingUrlId")),
+            "BookingUrlId": _col(chunk, "BookingUrlId").map(canonical_guid),
             "CardType": text(_col(chunk, "CardType")),
             "CardLast4": _col(chunk, "CardNo").map(crypto.card_last4),   # raises SensitiveDataError
             "Amount": to_float(_col(chunk, "Amount")),

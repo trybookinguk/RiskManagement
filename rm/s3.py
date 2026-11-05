@@ -208,11 +208,28 @@ def to_bool(s: pd.Series) -> pd.Series:
         low.isin(_TRUE | _FALSE), None)
 
 
+_HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
+_GUID36 = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def canonical_guid(value):
+    """Booking GUIDs in one form: lower case with dashes. Other text is returned trimmed."""
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    v = str(value).strip().strip("{}").strip()
+    if not v or v.lower() in _NULLS:
+        return None
+    if _HEX32.match(v):
+        v = f"{v[:8]}-{v[8:12]}-{v[12:16]}-{v[16:20]}-{v[20:]}"
+    return v.lower() if _GUID36.match(v) else v
+
+
 _DMY = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}")
 
 
-def to_iso(s: pd.Series, date_only: bool = False) -> pd.Series:
-    """'YYYY-MM-DD HH:MM:SS' (or 'YYYY-MM-DD') from ISO or UK d/m/Y text.
+def to_iso(s: pd.Series, date_only: bool = False, dayfirst: bool = True) -> pd.Series:
+    """'YYYY-MM-DD HH:MM:SS' (or 'YYYY-MM-DD') from ISO or n/n/YYYY text
+    (day first unless dayfirst=False).
 
     Offsets/Z are converted to UTC; naive values are kept as exported.
     """
@@ -228,6 +245,6 @@ def to_iso(s: pd.Series, date_only: bool = False) -> pd.Series:
         d = pd.to_datetime(t[iso], errors="coerce", utc=True, format="ISO8601")
         out[iso] = d.dt.strftime(fmt).where(d.notna(), None)
     if dmy.any():
-        d = pd.to_datetime(t[dmy], errors="coerce", dayfirst=True, utc=True, format="mixed")
+        d = pd.to_datetime(t[dmy], errors="coerce", dayfirst=dayfirst, utc=True, format="mixed")
         out[dmy] = d.dt.strftime(fmt).where(d.notna(), None)
     return out.where(out.notna(), None)

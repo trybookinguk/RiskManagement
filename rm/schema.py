@@ -460,4 +460,77 @@ CREATE TABLE risk_daily (               -- one row per scored account/event per 
 CREATE INDEX ix_risk_daily_id ON risk_daily(Level, Id);
 """))
 
+MIGRATIONS.append((5, "Booking Transactions keyed on the booking GUID; GUIDs in one form", """
+UPDATE bookings SET BookingUrlId = CASE WHEN LENGTH(TRIM(BookingUrlId)) = 32 THEN LOWER(SUBSTR(TRIM(BookingUrlId),1,8)||'-'||SUBSTR(TRIM(BookingUrlId),9,4)||'-'||SUBSTR(TRIM(BookingUrlId),13,4)||'-'||SUBSTR(TRIM(BookingUrlId),17,4)||'-'||SUBSTR(TRIM(BookingUrlId),21,12)) WHEN LENGTH(TRIM(BookingUrlId)) = 36 AND TRIM(BookingUrlId) LIKE '%-%-%-%-%' THEN LOWER(TRIM(BookingUrlId)) ELSE TRIM(BookingUrlId) END WHERE BookingUrlId IS NOT NULL;
+UPDATE gateway_recon SET BookingUrlId = CASE WHEN LENGTH(TRIM(BookingUrlId)) = 32 THEN LOWER(SUBSTR(TRIM(BookingUrlId),1,8)||'-'||SUBSTR(TRIM(BookingUrlId),9,4)||'-'||SUBSTR(TRIM(BookingUrlId),13,4)||'-'||SUBSTR(TRIM(BookingUrlId),17,4)||'-'||SUBSTR(TRIM(BookingUrlId),21,12)) WHEN LENGTH(TRIM(BookingUrlId)) = 36 AND TRIM(BookingUrlId) LIKE '%-%-%-%-%' THEN LOWER(TRIM(BookingUrlId)) ELSE TRIM(BookingUrlId) END WHERE BookingUrlId IS NOT NULL;
+
+CREATE TABLE booking_transactions_v5 (  -- latest row per booking GUID ("Booking ID" in the export), 1,100 days
+    BookingGuid        TEXT PRIMARY KEY,
+    TransactionDate    TEXT,
+    GatewayId          TEXT,
+    MerchantRefId      TEXT,
+    CardType           TEXT,
+    CardLast4          TEXT,
+    CvvCheck           TEXT,
+    Amount             REAL,
+    TransactionType    TEXT,
+    EventOrganiser     TEXT,
+    EventName          TEXT,
+    GatewayMessage     TEXT,
+    GatewayMessageDescription TEXT,
+    IsDecline          INTEGER,
+    Status             TEXT,
+    FirstNameHash      TEXT,
+    LastNameHash       TEXT,
+    EmailHash          TEXT,
+    PhoneHash          TEXT,
+    WaitedInQueue      INTEGER,
+    WaitTime           TEXT,
+    StartingPosition   INTEGER,
+    RowHash            TEXT,
+    SourceFile         TEXT,
+    FirstSeenAt        TEXT,
+    UpdatedAt          TEXT
+);
+INSERT INTO booking_transactions_v5 SELECT CAST(BookingId AS TEXT), TransactionDate, GatewayId, MerchantRefId,
+    CardType, CardLast4, CvvCheck, Amount, TransactionType, EventOrganiser, EventName, GatewayMessage,
+    GatewayMessageDescription, IsDecline, Status, FirstNameHash, LastNameHash, EmailHash, PhoneHash, WaitedInQueue,
+    WaitTime, StartingPosition, RowHash, SourceFile, FirstSeenAt, UpdatedAt FROM booking_transactions;
+DROP TABLE booking_transactions;
+ALTER TABLE booking_transactions_v5 RENAME TO booking_transactions;
+CREATE INDEX ix_bt_date ON booking_transactions(TransactionDate);
+CREATE INDEX ix_bt_gateway ON booking_transactions(GatewayId);
+CREATE INDEX ix_bt_card ON booking_transactions(CardType, CardLast4);
+CREATE INDEX ix_bt_email ON booking_transactions(EmailHash);
+CREATE INDEX ix_bt_phone ON booking_transactions(PhoneHash);
+
+CREATE TABLE booking_transaction_history_v5 (  -- every distinct version, 1,100 days
+    BookingGuid        TEXT NOT NULL,
+    RowHash            TEXT NOT NULL,
+    TransactionDate    TEXT,
+    GatewayId          TEXT,
+    MerchantRefId      TEXT,
+    CardType           TEXT,
+    CardLast4          TEXT,
+    CvvCheck           TEXT,
+    Amount             REAL,
+    TransactionType    TEXT,
+    GatewayMessage     TEXT,
+    GatewayMessageDescription TEXT,
+    IsDecline          INTEGER,
+    Status             TEXT,
+    EmailHash          TEXT,
+    PhoneHash          TEXT,
+    SourceFile         TEXT,
+    ImportedAt         TEXT,
+    PRIMARY KEY (BookingGuid, RowHash)
+);
+INSERT INTO booking_transaction_history_v5 SELECT CAST(BookingId AS TEXT), RowHash, TransactionDate, GatewayId,
+    MerchantRefId, CardType, CardLast4, CvvCheck, Amount, TransactionType, GatewayMessage, GatewayMessageDescription,
+    IsDecline, Status, EmailHash, PhoneHash, SourceFile, ImportedAt FROM booking_transaction_history;
+DROP TABLE booking_transaction_history;
+ALTER TABLE booking_transaction_history_v5 RENAME TO booking_transaction_history;
+CREATE INDEX ix_bth_date ON booking_transaction_history(TransactionDate);
+"""))
+
 LATEST_VERSION = MIGRATIONS[-1][0]

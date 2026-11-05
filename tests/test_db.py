@@ -120,3 +120,24 @@ def test_upgrade_v1_to_v2_keeps_data(env, monkeypatch):
     idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='bookings'")}
     assert {"ix_bookings_ip", "ix_bookings_urlid", "ix_bookings_account"} <= idx
     conn.close()
+
+
+def test_upgrade_to_v5_converts_ids_and_guids(env, monkeypatch):
+    s = config.get_settings()
+    conn = db.connect(s.risk_db)
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS[:4])
+    monkeypatch.setattr(db, "LATEST_VERSION", 4)
+    db.init_db(conn, s.risk_passphrase)
+    with conn:
+        conn.execute("INSERT INTO bookings(BookingTransactionId, BookingUrlId) VALUES (1, 'CADED60155C44FF5B40FADD2310ABB4A')")
+        conn.execute("INSERT INTO bookings(BookingTransactionId, BookingUrlId) VALUES (2, 'not-a-guid')")
+        conn.execute("INSERT INTO booking_transactions(BookingId, Status) VALUES (7, 'Success')")
+        conn.execute("INSERT INTO booking_transaction_history(BookingId, RowHash) VALUES (7, 'h')")
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS)
+    monkeypatch.setattr(db, "LATEST_VERSION", schema.LATEST_VERSION)
+    assert 5 in db.migrate(conn)
+    urls = [r[0] for r in conn.execute("SELECT BookingUrlId FROM bookings ORDER BY 1")]
+    assert urls == ["caded601-55c4-4ff5-b40f-add2310abb4a", "not-a-guid"]
+    assert tuple(conn.execute("SELECT BookingGuid, Status FROM booking_transactions").fetchone()) == ("7", "Success")
+    assert conn.execute("SELECT BookingGuid FROM booking_transaction_history").fetchone()[0] == "7"
+    conn.close()
