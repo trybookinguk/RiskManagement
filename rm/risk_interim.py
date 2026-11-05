@@ -38,6 +38,7 @@ CONFIG = {
     "exposure_event": {
         "held": [[20000, 60], [5000, 40], [1000, 20], [1, 5]],
         "days_to_session": [[3, 30], [7, 20], [14, 10]],     # [[within N days, points], ...]
+        "days_min_held": 250,     # session-date points only when at least this much is held
     },
     "fraud": {
         "timeline": {"weight": 8, "min_gap_days": 7, "per_gap": [[1, 2.5], [3, 2.0], [7, 1.5]],
@@ -53,7 +54,7 @@ CONFIG = {
         "immediate_sales": {"weight": 6, "window_hours": 24, "max_days_since_first_sale": 30,
                             "bands": [[1000, 1.0], [500, 0.6], [250, 0.3]]},     # £ sold in the first 24h of sales
         "no_phone": {"weight": 3, "threshold_pct": 50, "min_evidence": 5},  # % of bookings without a phone
-        "points_for_100": 20,      # signal points that make a score of 100 (before multipliers)
+        "points_for_100": 25,      # signal points that make a score of 100 (before multipliers)
         "age_multiplier": [[30, 1.5], [90, 1.3], [365, 1.15]],   # [[under N days, x], ...]
     },
     "trust": {     # multiplies the fraud score; account history and payouts
@@ -62,6 +63,9 @@ CONFIG = {
         "past_events": [[20, 0.8], [5, 0.9]],                  # events whose last session has passed
         "past_gross": [[100000, 0.7], [20000, 0.8], [5000, 0.9]],   # £ sold for those events
         "floor": 0.4,                                          # trust never cuts a score by more than 60%
+        # A new account has no transfers by definition: apply the larger of the age
+        # multiplier and the no-transfers multiplier, not both.
+        "new_account_combine": "max",                          # or "multiply"
     },
     "bands": {"fraud": [[60, "Critical"], [40, "High"], [20, "Medium"]],
               "exposure": [[70, "Critical"], [45, "High"], [20, "Medium"]]},
@@ -192,6 +196,10 @@ def priority(fraud_score, exposure_score, cfg=CONFIG):
     fb = _band(fraud_score, cfg["bands"]["fraud"])
     eb = _band(exposure_score, cfg["bands"]["exposure"])
     return cfg["priority"][fb][_EXPOSURE_ORDER.index(eb)], fb, eb
+
+
+def _pts(v):
+    return f"+{round(v, 1):g}"
 
 
 def _money(v):
@@ -358,20 +366,21 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
                                    m.get("EventCreatedSource"), cfg)
         if tl:
             pts += tl
-            d = ["?" if x is None else f"{x:.0f}d" for x in gaps]
-            reasons.append(f"short timeline: account→event {d[0]}, event→session {d[1]}, account→session {d[2]}")
+            short = [f"{n} {g:.0f}d" for n, g in zip(("account→event", "event→session", "account→session"), gaps)
+                     if g is not None and 0 <= g < f["timeline"]["min_gap_days"]]
+            reasons.append(f"short timeline: {', '.join(short)} {_pts(tl)}")
         known, foreign = ip.get(eid, (0, 0))
         ip_pct = 100.0 * foreign / known if known >= f["outside_uk_ip"]["min_evidence"] else None
         s = _severity(ip_pct, f["outside_uk_ip"]["threshold_pct"], f["outside_uk_ip"]["weight"])
         if s:
             pts += s
-            reasons.append(f"{ip_pct:.0f}% overseas IPs")
+            reasons.append(f"{ip_pct:.0f}% overseas IPs {_pts(s)}")
         att, dn = dec.get(eid, (0, 0))
         dec_pct = 100.0 * dn / att if att >= f["declines"]["min_evidence"] else None
         s = _severity(dec_pct, f["declines"]["threshold_pct"], f["declines"]["weight"])
         if s:
             pts += s
-            reasons.append(f"{dec_pct:.0f}% declined ({dn}/{att}, {f['declines']['days']}d)")
+            reasons.append(f"{dec_pct:.0f}% declined ({dn}/{att}, {f['declines']['days']}d) {_pts(s)}")
         mult, age = age_multiplier(a.get("DateTimeCreated"), today, cfg)
         days_to = _days(t, e["NextSession"])
 
@@ -379,7 +388,7 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
         night = night_created(a.get("DateTimeCreated"), cfg)
         if night and age is not None and age <= nc["max_account_age_days"]:
             pts += nc["weight"]
-            reasons.append(f"account created {night:%H:%M} (night)")
+            reasons.append(f"account created {night:%H:%M} (night) {_pts(nc['weight'])}")
 
         ie = f["imminent_event"]
         created = m.get("EventCreated") or m.get("FirstBookingDate")
@@ -393,7 +402,7 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
                     break
         if share:
             pts += ie["weight"] * share
-            reasons.append(f"event in {max(whole_days, 0)}d, created {int(ev_age)}d ago")
+            reasons.append(f"event in {max(whole_days, 0)}d, created {int(ev_age)}d ago {_pts(ie['weight'] * share)}")
 
         first_sale, early, gross, tickets = sales.get(eid, (None, 0, 0, 0))
         hp = f["high_ticket_price"]
@@ -401,7 +410,7 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
         share = _band_value(avg_price, hp["bands"])
         if share:
             pts += hp["weight"] * share
-            reasons.append(f"avg ticket {_money(avg_price)}")
+            reasons.append(f"avg ticket {_money(avg_price)} {_pts(hp['weight'] * share)}")
 
         im = f["immediate_sales"]
         since_first = _days(first_sale, t)
@@ -409,7 +418,7 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
                  if since_first is not None and since_first <= im["max_days_since_first_sale"] else 0)
         if share:
             pts += im["weight"] * share
-            reasons.append(f"{_money(early)} sold in first {im['window_hours']}h")
+            reasons.append(f"{_money(early)} sold in first {im['window_hours']}h {_pts(im['weight'] * share)}")
 
         npn = f["no_phone"]
         pn, pmiss = phone.get(eid, (0, 0))
@@ -417,16 +426,26 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
         s = _severity(nophone_pct, npn["threshold_pct"], npn["weight"])
         if s:
             pts += s
-            reasons.append(f"{nophone_pct:.0f}% bookings without a phone")
+            reasons.append(f"{nophone_pct:.0f}% bookings without a phone {_pts(s)}")
 
-        if mult > 1:
-            reasons.append(f"new account ({age}d)")
         tmult, twhy, n_transfers, past_n, past_gross = trust(e["AccountId"])
-        if twhy:
-            reasons.append(twhy)
-        fraud = round(min(100.0, 100.0 * pts / f["points_for_100"] * mult * tmult), 1) if pts else 0.0
+        if tmult > 1 and cfg["trust"].get("new_account_combine", "max") == "max":
+            combined = max(mult, tmult)
+            if mult > 1:
+                reasons.append(f"new account ({age}d){'' if mult < tmult else f' x{mult:g}'}")
+            if twhy:
+                reasons.append(f"{twhy}{'' if tmult <= mult else f' x{tmult:g}'}")
+        else:
+            combined = mult * tmult
+            if mult > 1:
+                reasons.append(f"new account ({age}d) x{mult:g}")
+            if twhy:
+                reasons.append(f"{twhy} x{tmult:.2f}".rstrip("0").rstrip("."))
+        fraud = round(min(100.0, 100.0 * pts / f["points_for_100"] * combined), 1) if pts else 0.0
         days_pts = 0
         for limit, p in cfg["exposure_event"]["days_to_session"]:
+            if (e["Held"] or 0) < cfg["exposure_event"].get("days_min_held", 0):
+                break
             if days_to is not None and days_to <= limit:
                 days_pts = p
                 break

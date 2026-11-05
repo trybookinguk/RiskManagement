@@ -41,8 +41,8 @@ def test_interim_scoring(loaded):
     assert e20["Gaps"][0] == pytest.approx(0.25) and all(g < 7 for g in e20["Gaps"])
     assert e20["DeclinePct"] == pytest.approx(3 / 6 * 100)       # 6 attempts mapped to event 20 (incl. by name)
     assert e20["AgeDays"] == 4
-    # timeline 8 + declines 5*min(50/20,2)/2=5 -> 13/19*100 * 1.5 -> capped at 100
-    assert e20["FraudScore"] == 100.0 and e20["Priority"] == "P1"
+    # timeline 8 + declines 5 + imminent event 5 = 18/25*100 * 1.5 (new account; no-transfers x1.3 not added) -> 100
+    assert e20["FraudScore"] == 100.0 and e20["Priority"] == "P2"   # only £20 held: no session-date exposure
     assert "short timeline" in e20["Reasons"] and "declined" in e20["Reasons"] and "new account" in e20["Reasons"]
     acc = {a["AccountId"]: a for a in r["accounts"]}
     assert acc[2]["FraudScore"] == 100.0 and acc[2]["AmountAtRisk"] == 1250.5
@@ -68,7 +68,7 @@ def test_report_email_and_changes(loaded, capsys):
     assert run_report(graph=g) == 0
     to, subj, page = g.mail[0]
     assert to == "henry@trybooking.co.uk"
-    assert subj.startswith("Risk report 2026-11-02: 1 P1 account(s), 1 P1 event(s)")
+    assert subj.startswith("Risk report 2026-11-02: 0 P1 account(s), 0 P1 event(s)")
     for text in ("Top 10 risk accounts", "Top 10 risk events", "New Promoter", "Booking Transactions import check",
                  "UNCLASSIFIED", "Gateway hiccup 42", "event_name"):
         assert text in page

@@ -88,3 +88,13 @@ def test_signal_helpers():
     assert risk_interim.trust_multiplier(0, 8, 9000, False) == (pytest.approx(0.81), "trusted: 8 past events £9,000")
     assert risk_interim.trust_multiplier(3, 0, 0, True) == (1.0, "history: 3 bank transfers")
     assert risk_interim.trust_multiplier(6, 0, 0, True)[0] == 0.8
+
+
+def test_reasons_show_points(scenario):
+    r = risk_interim.score(scenario, date.fromisoformat(TODAY))
+    bad = {e["EventId"]: e for e in r["events"]}[300]
+    assert "account created 01:30 (night) +3" in bad["Reasons"] and "avg ticket £100 +4" in bad["Reasons"]
+    assert "new account (0d) x1.5" in bad["Reasons"] and "x1.3" not in bad["Reasons"]   # larger multiplier only
+    good = {e["EventId"]: e for e in r["events"]}[400]
+    assert good["Reasons"].endswith("trusted: 24 bank transfers, 12 past events £60,000 x0.43")
+    print("\n" + bad["Reasons"] + "\n" + good["Reasons"], bad["FraudScore"], good["FraudScore"], good["Priority"])
