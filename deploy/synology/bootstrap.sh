@@ -19,7 +19,8 @@
 #   1. creates the folders                 docker/RiskManagement, docker/riskmanagement-data
 #   2. creates a read-only deploy key      -> add it to GitHub (it tells you how), then Run again
 #   3. clones the private repo
-#   4. creates .env from .env.example      -> fill it in with Text Editor, then Run again
+#   4. creates setup/env-edit.txt          -> fill it in with Text Editor, then Run again
+#      (moved into the root-only .env and deleted on the next Run)
 #   5. builds and starts the containers, creates the warehouse, runs the tests (rmctl.sh setup)
 #
 # Output: the task's run details (email) and
@@ -130,21 +131,46 @@ else
 fi
 
 # 4. .env ---------------------------------------------------------------------
+# .env holds the secrets, so it is root-only (600) and DSM Text Editor can't
+# open it. You edit a copy instead: setup/env-edit.txt, readable/writable by
+# the DSM administrators group. The next Run moves it into .env (root-only)
+# and deletes the copy.
 ENV="$REPO_DIR/.env"
-if [ ! -f "$ENV" ]; then
-  cp "$REPO_DIR/.env.example" "$ENV" && chmod 600 "$ENV"
-fi
+EDIT="$SETUP_DIR/env-edit.txt"
+filled() { grep -Eq '^RISK_ENCRYPTION_PASSPHRASE=.+' "$1" && grep -Eq '^AWS_ACCESS_KEY_ID=.+' "$1"; }
+editable() {   # let DSM administrators (Text Editor) open it, nobody else
+  if getent group administrators >/dev/null 2>&1; then
+    chown root:administrators "$1" && chmod 660 "$1"
+  else
+    chmod 666 "$1"
+  fi
+}
+
+[ -f "$ENV" ] || { cp "$REPO_DIR/.env.example" "$ENV" || die "cannot create $ENV"; }
 chmod 600 "$ENV"
-if ! grep -Eq '^RISK_ENCRYPTION_PASSPHRASE=.+' "$ENV" || ! grep -Eq '^AWS_ACCESS_KEY_ID=.+' "$ENV"; then
+if [ -f "$EDIT" ]; then
+  sed -i 's/\r$//' "$EDIT"
+  if filled "$EDIT"; then
+    say "Applying your settings from setup/env-edit.txt"
+    cat "$EDIT" > "$ENV" && chmod 600 "$ENV" || die "could not write $ENV"
+    rm -f "$EDIT"
+    say "Settings saved to .env (root-only); setup/env-edit.txt deleted"
+  fi
+fi
+if ! filled "$ENV"; then
+  [ -f "$EDIT" ] || cp "$ENV" "$EDIT"
+  editable "$EDIT"
   next_step \
-    "STEP: fill in the settings file (one time)." \
+    "STEP: fill in the settings (one time)." \
     "" \
-    "1. In File Station open docker > RiskManagement > .env" \
+    "1. In File Station open docker > riskmanagement-data > setup > env-edit.txt" \
     "   (right-click > Open with Text Editor; install Text Editor from Package Center if needed)." \
-    "   If you can't see it: File Station > Settings > tick 'Show hidden files'." \
-    "2. Fill in each line. RISK_ENCRYPTION_PASSPHRASE is the 'encrypt word':" \
+    "2. Fill in each line after the = sign. RISK_ENCRYPTION_PASSPHRASE is the 'encrypt word':" \
     "   choose it once and save it in the password manager FIRST - it must never change." \
-    "3. Save, then Run this task again."
+    "3. Save, then Run this task again. The settings are moved into the protected .env" \
+    "   (readable by root only) and env-edit.txt is deleted." \
+    "" \
+    "Still empty: $(grep -Eo '^(RISK_ENCRYPTION_PASSPHRASE|AWS_ACCESS_KEY_ID)=$' "$EDIT" | tr -d '=' | tr '\n' ' ')"
 fi
 say ".env: OK"
 

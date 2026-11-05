@@ -72,7 +72,7 @@ NEXT_STEP.txt**.
 | Run | What happens | What you do |
 | --- | --- | --- |
 | 1 | Creates the folders and a read-only deploy key | Open `setup/deploy_key.pub` with Text Editor and copy the line. On GitHub go to RiskManagement → Settings → Deploy keys → Add deploy key. Title it *Synology NAS*, paste the line, leave **Allow write access unticked**, and save. Run again. |
-| 2 | Clones the repo and creates `.env` from `.env.example` | In File Station open **docker → RiskManagement → .env** with Text Editor. If you can't see it, turn on File Station → Settings → *Show hidden files*. Fill in every line. Choose `RISK_ENCRYPTION_PASSPHRASE` **once** and save it in the password manager first, because it must never change. Save, then Run again. |
+| 2 | Clones the repo and creates **`setup/env-edit.txt`**, an editable copy of the settings. `.env` itself is root-only, so DSM Text Editor can't open it. | In File Station open **docker → riskmanagement-data → setup → env-edit.txt** with Text Editor and fill in every line. Choose `RISK_ENCRYPTION_PASSPHRASE` **once** and save it in the password manager first, because it must never change. Save, then Run again. The next run moves the settings into the protected `.env` and **deletes** `env-edit.txt`. |
 | 3 | Builds the image, starts the worker, creates the warehouse and runs the tests | Nothing. `NEXT_STEP.txt` says **DONE**. The first build takes several minutes. |
 
 If GitHub can't be reached on port 22, the deploy key is set up to use port
@@ -118,6 +118,7 @@ same pattern and are added in build steps 3, 4 and 6.
 | `full-refresh` | One-off lifetime load from BookingDataAll |
 | `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |
 | `restart` | Restart the containers |
+| `env-export`, then `env-apply` | Change a setting: `env-export` copies `.env` to `setup/env-edit.txt` for Text Editor. `env-apply` puts it back (root-only), deletes the copy and restarts the worker. It refuses to change `RISK_ENCRYPTION_PASSPHRASE` once the warehouse exists. |
 | `run SCRIPT [args]` | Any `bin/` script, e.g. `run rm_admin.py create-token power-bi` |
 
 Only one `rmctl` command runs at a time. A second one waits for the first
