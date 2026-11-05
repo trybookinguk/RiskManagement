@@ -30,7 +30,7 @@ only on the Synology NAS.
 | `bin/rm_admin.py` | `init-db`, `status`, dashboard users, API tokens |
 | `bin/ingest_s3.py` | Nightly S3 load; `--full-refresh` for lifetime history |
 | `tests/` | `python3 -m pytest -q` |
-| `deploy/synology/` | Dockerfile, docker-compose, NAS runbook |
+| `deploy/synology/` | Dockerfile, docker-compose, `bootstrap.sh` + `rmctl.sh` (no-SSH setup and tasks via DSM Task Scheduler), NAS runbook |
 | `legacy/` | The previous fraud report, which still depends on s3reporting. Replaced in phase 2. |
 
 ## Data protection
