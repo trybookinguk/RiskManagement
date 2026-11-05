@@ -17,7 +17,121 @@ Pi. It has one Docker image and two containers:
 It needs an **x86-64** Synology model (Container Manager). Plan on about 2 GB
 of RAM free for the one-off BookingDataAll load.
 
-## One-time setup
+Everything below is done from the **DSM web interface**: Package Center,
+Task Scheduler, File Station and Text Editor. **No SSH is needed.** Two scripts
+in this folder do the work:
+
+| Script | Use |
+| --- | --- |
+| `bootstrap.sh` | One-off first-time setup. You paste it into a Task Scheduler task and click Run a few times. |
+| `rmctl.sh` | Every task after that: nightly jobs, updates, status, users. |
+
+## 1. Before you start (Package Center)
+
+Install these from **Package Center**:
+- **Container Manager.** It runs Docker and creates the `docker` shared
+  folder.
+- **Git Server.** It provides the `git` command the scripts use.
+- **Text Editor.** You use it to edit `.env` and read logs in File Station.
+
+Optional, recommended: create `riskmanagement-data` yourself first as an
+**encrypted shared folder** inside `docker`. Go to Control Panel → Shared
+Folder → Create, and tick *Encrypt this shared folder*. That way `risk.db` is
+encrypted at rest. If it doesn't exist, the bootstrap creates a plain folder.
+
+## 2. First-time setup: the bootstrap task
+
+**Create the task once.**
+1. Control Panel → **Task Scheduler** → Create → Scheduled Task →
+   **User-defined script**.
+2. On the **General** tab:
+   - Task: `RiskManagement bootstrap`
+   - User: **root**
+   - **Untick Enabled**, because it only runs when you click Run.
+3. On the **Task Settings** tab:
+   - Tick *Send run details by email* and enter your address.
+   - **Paste the whole of `deploy/synology/bootstrap.sh`** into *Run command*.
+     Open it on GitHub, choose Raw, select all and copy.
+4. Click OK.
+
+**Then select the task and click Run.** Each run stops at the next thing it
+needs from you and tells you what to do. The message is in the task email,
+and in File Station at **docker → riskmanagement-data → setup →
+NEXT_STEP.txt**.
+
+| Run | What happens | What you do |
+| --- | --- | --- |
+| 1 | Creates the folders and a read-only deploy key | Open `setup/deploy_key.pub` with Text Editor and copy the line. On GitHub go to RiskManagement → Settings → Deploy keys → Add deploy key. Title it *Synology NAS*, paste the line, leave **Allow write access unticked**, and save. Run again. |
+| 2 | Clones the repo and creates `.env` from `.env.example` | In File Station open **docker → RiskManagement → .env** with Text Editor. If you can't see it, turn on File Station → Settings → *Show hidden files*. Fill in every line. Choose `RISK_ENCRYPTION_PASSPHRASE` **once** and save it in the password manager first, because it must never change. Save, then Run again. |
+| 3 | Builds the image, starts the worker, creates the warehouse and runs the tests | Nothing. `NEXT_STEP.txt` says **DONE**. The first build takes several minutes. |
+
+If GitHub can't be reached on port 22, the deploy key is set up to use port
+443 instead.
+
+## 3. The tasks to create
+
+Each task is a Task Scheduler **User-defined script**:
+- User: **root**
+- *Send run details by email*: ticked
+- *Run command*: the line shown in the table
+
+| Task name | Schedule | Run command |
+| --- | --- | --- |
+| RiskManagement full refresh | **disabled**, Run by hand once after setup (25–35 min, 2.5–3.5 GB); avoid 02:00–04:00 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh full-refresh` |
+| RiskManagement S3 nightly | daily 04:10 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh ingest-s3` |
+| RiskManagement update | weekly, e.g. Sunday 03:00, or Run by hand after a merge | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh update` |
+| RiskManagement status | **disabled**, Run by hand | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh status` |
+| RiskManagement command | **disabled**, edit the line, then Run | e.g. `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh add-user henry@trybooking.co.uk admin` |
+
+The SharePoint (04:20), Stripe (04:30) and backup (04:50) tasks follow the
+same pattern and are added in build steps 3, 4 and 6.
+
+## 4. Seeing the results
+
+- **Email:** each task's run details arrive by email when *Send run details
+  by email* is ticked. A failed run has a non-zero exit code.
+- **Logs:** File Station → **docker → riskmanagement-data → logs**. There's
+  one file per run, e.g. `ingest-s3-20261106-041000-1234.log`; open it with
+  Text Editor. The newest 60 per command are kept.
+- **Quick check:** Run the *RiskManagement status* task. It shows the
+  warehouse size, row counts and the last import per source.
+
+## 5. `rmctl.sh` commands
+
+| Command | Does |
+| --- | --- |
+| `setup` | Build the image, start the worker, create or upgrade the warehouse, run the tests |
+| `update` | `git pull`, rebuild only if `requirements.txt` or the Dockerfile changed, upgrade the warehouse |
+| `status` | Warehouse size, row counts, last import per source |
+| `test` | Run the test suite inside the container |
+| `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
+| `full-refresh` | One-off lifetime load from BookingDataAll |
+| `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |
+| `restart` | Restart the containers |
+| `run SCRIPT [args]` | Any `bin/` script, e.g. `run rm_admin.py create-token power-bi` |
+
+Only one `rmctl` command runs at a time. A second one waits for the first
+(for up to 2 hours), so a by-hand full refresh can't collide with the nightly
+job.
+
+**Ad-hoc commands without a task:** Container Manager → Container →
+`riskmanagement` → Details → **Terminal** → Create → `bash`. Then run, for
+example, `python3 bin/rm_admin.py status`. That's a terminal inside the
+container, in the browser.
+
+## 6. Updating
+
+Run the **RiskManagement update** task. It pulls the latest code, rebuilds the
+image only when needed, and applies any warehouse upgrade. The weekly
+schedule does this automatically.
+
+## Legacy report
+
+`legacy/fraud_risk_report.py` is the current report. It still needs
+s3reporting and stays on the Pi until phase 2 replaces it. Nothing in this
+setup runs it.
+
+## Appendix A: the same with SSH
 
 Run these over SSH on the NAS, as root (`sudo -i`).
 
@@ -75,7 +189,7 @@ TryBooking corrects old data.
 docker exec riskmanagement python3 bin/rm_admin.py add-user henry@trybooking.co.uk --role admin
 ```
 
-## Admin commands
+### Admin commands (SSH)
 
 ```bash
 docker exec riskmanagement python3 bin/rm_admin.py status          # schema, size, rows, last imports
@@ -86,7 +200,7 @@ docker exec riskmanagement python3 bin/rm_admin.py create-token power-bi   # API
 docker exec riskmanagement python3 bin/rm_admin.py revoke-token tok_…
 ```
 
-## Scheduling (DSM Task Scheduler)
+### Scheduling with direct docker exec
 
 Go to Control Panel → Task Scheduler → Create → Scheduled Task →
 User-defined script. Run each task as `root`, daily, and tick *Send run
@@ -101,7 +215,7 @@ The import jobs arrive in build steps 2–4. Once they're in:
 | 04:30 | `docker exec riskmanagement python3 bin/ingest_stripe.py` |
 | 04:50 | `docker exec riskmanagement python3 bin/backup.py` |
 
-## Updating
+### Updating (SSH)
 
 ```bash
 git -C /volume1/docker/RiskManagement pull origin main
@@ -112,13 +226,10 @@ Code changes are picked up straight away. Rebuild with
 `docker compose up -d --build` only when `requirements.txt` or the
 `Dockerfile` changes; the PR description will say when.
 
-## Legacy report
+## Appendix B: private repo access by hand (deploy key)
 
-`legacy/fraud_risk_report.py` is the current report. It still needs
-s3reporting and stays on the Pi until phase 2 replaces it. Nothing in this
-setup runs it.
-
-## Private repo access (deploy key)
+`bootstrap.sh` does all of this for you. These are the manual steps, for
+reference.
 
 A deploy key is an SSH key that can read **only this repo** and nothing else
 on GitHub. It belongs to the repo, not to a person, so it doesn't break when
