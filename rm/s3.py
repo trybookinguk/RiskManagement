@@ -12,7 +12,7 @@ import csv
 import io
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pandas as pd
 
@@ -107,7 +107,7 @@ class LocalSource:
                     continue
                 st = os.stat(full)
                 out.append({"Key": key, "Size": st.st_size, "ETag": f"{st.st_size}-{int(st.st_mtime)}",
-                            "LastModified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
+                            "LastModified": datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
         return out
 
     def head_bytes(self, key: str, n: int) -> bytes:

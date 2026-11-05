@@ -422,4 +422,42 @@ ALTER TABLE accounts ADD COLUMN TierSystem TEXT;      -- Accounts.TierSystem (cu
 ALTER TABLE accounts ADD COLUMN PreviousTier TEXT;
 """))
 
+MIGRATIONS.append((4, "daily balance movements; daily interim risk scores", """
+CREATE TABLE balance_movements (        -- AccountMovementDaily, one row per account per day
+    AccountId              INTEGER NOT NULL,
+    MovementDate           TEXT NOT NULL,   -- the file's date (YYYYMMDD in its name)
+    TicketValue            REAL,
+    Donation               REAL,
+    TotalBookingFee        REAL,
+    TicketRefundedAmount   REAL,
+    DonationRefundedAmount REAL,
+    Pending                REAL,
+    OpeningBalance         REAL,
+    ClosingBalance         REAL,
+    StripeTransfers        REAL,
+    FundTransfer           REAL,            -- export column "FundTransafer"
+    Recredit               REAL,
+    DebitListing           REAL,
+    AdditionalDebitBilling REAL,
+    AdditionalCreditBilling REAL,
+    PRIMARY KEY (AccountId, MovementDate)
+);
+CREATE INDEX ix_movements_date ON balance_movements(MovementDate);
+
+CREATE TABLE risk_daily (               -- one row per scored account/event per report run
+    RunDate       TEXT NOT NULL,
+    Level         TEXT NOT NULL,            -- account | event
+    Id            INTEGER NOT NULL,         -- AccountId or EventId
+    AccountId     INTEGER,
+    ExposureScore REAL,
+    FraudScore    REAL,
+    Priority      TEXT,                     -- P1..P4 or '-'
+    AmountAtRisk  REAL,
+    Reasons       TEXT,
+    ModelVersion  TEXT,
+    PRIMARY KEY (RunDate, Level, Id)
+);
+CREATE INDEX ix_risk_daily_id ON risk_daily(Level, Id);
+"""))
+
 LATEST_VERSION = MIGRATIONS[-1][0]

@@ -70,6 +70,7 @@ class Settings:
     sharepoint_transactions_folder: str = "Platform Data/Booking Transactions"
     payment_retention_days: int = 1100
     alert_email: str = "henry@trybooking.co.uk"
+    report_email: str = "henry@trybooking.co.uk"
     timezone: str = "Europe/London"
     web_port: int = 8085
 
@@ -89,6 +90,7 @@ class Settings:
         "sharepoint_transactions_folder": "SHAREPOINT_TRANSACTIONS_FOLDER",
         "payment_retention_days": "PAYMENT_RETENTION_DAYS",
         "alert_email": "ALERT_EMAIL",
+        "report_email": "REPORT_EMAIL",
         "timezone": "RISK_TIMEZONE",
         "web_port": "WEB_PORT",
     }
