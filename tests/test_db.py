@@ -112,7 +112,7 @@ def test_upgrade_v1_to_v2_keeps_data(env, monkeypatch):
         conn.execute("INSERT INTO users(UserId, UsernameHash) VALUES (1, ?)", (full,))
     monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS)
     monkeypatch.setattr(db, "LATEST_VERSION", schema.LATEST_VERSION)
-    assert db.migrate(conn) == [2]
+    assert db.migrate(conn) == list(range(2, schema.LATEST_VERSION + 1))
     b = conn.execute("SELECT * FROM bookings").fetchone()
     assert b["IPHash"] == "a" * 32 and "EventName" not in b.keys() and "UpdatedAt" not in b.keys()
     assert tuple(conn.execute("SELECT EventId, AccountId, EventName FROM event_names").fetchone()) == (50, 5, "Gala")

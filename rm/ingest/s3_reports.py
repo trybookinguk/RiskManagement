@@ -123,7 +123,7 @@ def load_bookings(conn, hasher, source, key: str, chunksize: int = 100_000) -> d
 
 ACCOUNT_COLUMNS = ["Id", "AccountId", "AccountName", "AccountStatus", "DateTimeCreated", "FirstEventCreation",
                    "LastEventCreation", "IsVerified", "BankAccountIsDeleted", "BankAccountStatusId", "Country",
-                   "Postcode", "Industry", "SubIndustry", "GatewayGroup"]
+                   "Postcode", "Industry", "SubIndustry", "GatewayGroup", "TierSystem", "PreviousTier"]
 
 
 def load_accounts(conn, source, key: str, snapshot_date: str) -> dict:
@@ -147,6 +147,8 @@ def load_accounts(conn, source, key: str, snapshot_date: str) -> dict:
             "Industry": text(_col(chunk, "Industry")),
             "SubIndustry": text(_col(chunk, "SubIndustry")),
             "GatewayGroup": text(_col(chunk, "GatewayGroup")),
+            "TierSystem": text(_col(chunk, "TierSystem")),
+            "PreviousTier": text(_col(chunk, "PreviousTier")),
         })
         df = df[df["AccountId"].notna()]
         df["UpdatedAt"] = now
@@ -156,6 +158,9 @@ def load_accounts(conn, source, key: str, snapshot_date: str) -> dict:
         with conn:
             written += db.upsert(conn, "accounts", _records(df), ["AccountId"])
             db.upsert(conn, "account_snapshots", _records(snap), ["AccountId", "SnapshotDate"])
+            tiers = df[df["TierSystem"].notna()][["AccountId", "TierSystem"]].rename(columns={"TierSystem": "Tier"})
+            tiers["SnapshotDate"] = snapshot_date
+            db.upsert(conn, "account_tiers", _records(tiers), ["AccountId"])
         read += len(chunk)
     return {"rows_read": read, "rows_written": written}
 

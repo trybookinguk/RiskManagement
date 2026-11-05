@@ -89,12 +89,23 @@ Each task is a Task Scheduler **User-defined script**:
 | --- | --- | --- |
 | RiskManagement full refresh | **disabled**, Run by hand once after setup (25–35 min, 2.5–3.5 GB); avoid 02:00–04:00 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh full-refresh` |
 | RiskManagement S3 nightly | daily 04:10 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh ingest-s3` |
+| RiskManagement SharePoint nightly | daily 04:20 | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh ingest-sharepoint` |
 | RiskManagement update | weekly, e.g. Sunday 03:00, or Run by hand after a merge | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh update` |
 | RiskManagement status | **disabled**, Run by hand | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh status` |
 | RiskManagement command | **disabled**, edit the line, then Run | e.g. `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh add-user henry@trybooking.co.uk admin` |
 
-The SharePoint (04:20), Stripe (04:30) and backup (04:50) tasks follow the
-same pattern and are added in build steps 3, 4 and 6.
+The Stripe (04:30) and backup (04:50) tasks follow the same pattern and are
+added in build steps 4 and 6.
+
+**SharePoint import:** drop Booking Transactions CSVs into SharePoint
+**Platform Data → Booking Transactions**.
+- **Imported:** a file that imports is deleted, but only after its rows are
+  saved.
+- **Not imported:** a file that can't be imported moves to **Booking
+  Transactions → Failed** with a `.error.txt` note saying why, and an alert
+  email goes to `ALERT_EMAIL`.
+- **Checking first:** Run the *command* task with `rmctl.sh ingest-sharepoint
+  --dry-run` to check files without changing anything.
 
 ## 4. Seeing the results
 
@@ -114,6 +125,7 @@ same pattern and are added in build steps 3, 4 and 6.
 | `update` | `git pull`, rebuild only if `requirements.txt` or the Dockerfile changed, upgrade the warehouse |
 | `status` | Warehouse size, row counts, last import per source |
 | `test` | Run the test suite inside the container |
+| `ingest-sharepoint [options]` | Import Booking Transactions CSVs from SharePoint. `--dry-run` checks them without storing, moving or deleting anything. |
 | `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
 | `full-refresh` | One-off lifetime load from BookingDataAll |
 | `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |

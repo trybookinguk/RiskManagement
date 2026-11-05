@@ -49,7 +49,7 @@ one is cut down to what's used.
 | `s3_inventory.py` `parse_head` | `rm/s3.py` | Preamble and delimiter handling (TransactionReconciliation and AccountMovement have a preamble) | Inventory and email |
 | `warehouse_backfill.py` | `rm/s3.py` | Streaming only the needed columns with `usecols` | — |
 | `modules/utils/backup_crypto.py` | `rm/crypto.py` | scrypt key derivation, plus `encrypt_stream` / `decrypt_stream` for the encrypted backup **file** (no field encryption) | — |
-| `modules/tier_snapshot.py` (format only) | `rm/ingest/s3_reports.py` | Reading `tier_snapshot.json` from SharePoint | Tier calculation |
+| — | — | Tiers come from the S3 Accounts export (`TierSystem`, `PreviousTier`), not s3reporting's tier snapshot | Tier calculation, `tier_state.db` |
 
 Not copied:
 - `warehouse.py`, `prepare_data.py` and DuckDB
@@ -76,7 +76,7 @@ RiskManagement no longer imports s3reporting at runtime.
 | `stripe_disputes` | Stripe | dispute id | charge, created, amount, reason, status, evidence due |
 | `stripe_efw` | Stripe | warning id | charge, created, fraud_type, actionable |
 | `stripe_reviews` | Stripe | review id | charge, reason, opened/closed, closed reason |
-| `account_tiers` | SharePoint `tier_snapshot.json` | AccountId | tier, snapshot date |
+| `account_tiers` | S3 `Accounts` (`TierSystem`, `PreviousTier`) | AccountId | tier, snapshot date. s3reporting no longer writes `tier_snapshot.json` to SharePoint (it moved to the Pi's local `tier_state.db`), so the tier comes from the Accounts export instead. That has no dependency on the Pi. |
 | `import_log` | all jobs | run id | source, file or day, rows read/inserted/updated, status, error, started/finished |
 | `stripe_sync` | Stripe jobs | (object, day) | status, rows, completed at. Used for resume and catch-up. |
 | `dashboard_users`, `api_audit` | API | — | Allowed sign-ins and roles, and every request (section 6) |

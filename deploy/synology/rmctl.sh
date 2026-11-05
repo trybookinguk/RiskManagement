@@ -18,6 +18,7 @@
 #   test                  run the test suite inside the container
 #   ingest-s3 [options]   nightly S3 load (options passed through, e.g. --dry-run)
 #   full-refresh          one-off lifetime load from BookingDataAll (25-35 min)
+#   ingest-sharepoint [options]  import Booking Transactions CSVs from SharePoint (e.g. --dry-run)
 #   add-user EMAIL [viewer|admin]
 #   remove-user EMAIL
 #   list-users
@@ -50,7 +51,7 @@ if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
 fi
 
 case "$CMD" in
-  setup|update|status|test|ingest-s3|full-refresh|add-user|remove-user|list-users|restart|run|env-export|env-apply) ;;
+  setup|update|status|test|ingest-s3|ingest-sharepoint|full-refresh|add-user|remove-user|list-users|restart|run|env-export|env-apply) ;;
   *) usage; echo; echo "ERROR: unknown command: $CMD"; exit 1 ;;
 esac
 
@@ -168,6 +169,7 @@ case "$CMD" in
   status)      py bin/rm_admin.py status; rc=$? ;;
   test)        ensure_up; in_container python3 -m pytest -q -p no:cacheprovider; rc=$? ;;
   ingest-s3)   py bin/ingest_s3.py "$@"; rc=$? ;;
+  ingest-sharepoint) py bin/ingest_sharepoint.py "$@"; rc=$? ;;
   full-refresh)
     say "Lifetime load from BookingDataAll: expect 25-35 minutes and 2.5-3.5 GB"
     py bin/ingest_s3.py --full-refresh "$@"; rc=$? ;;

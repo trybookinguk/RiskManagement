@@ -417,4 +417,9 @@ UPDATE stripe_charges SET BillingPostcodeHash = SUBSTR(BillingPostcodeHash, 1, 3
     BillingEmailHash = SUBSTR(BillingEmailHash, 1, 32);
 """))
 
+MIGRATIONS.append((3, "account tier from the S3 Accounts export", """
+ALTER TABLE accounts ADD COLUMN TierSystem TEXT;      -- Accounts.TierSystem (current tier, as exported)
+ALTER TABLE accounts ADD COLUMN PreviousTier TEXT;
+"""))
+
 LATEST_VERSION = MIGRATIONS[-1][0]
