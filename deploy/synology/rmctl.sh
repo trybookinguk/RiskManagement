@@ -22,6 +22,9 @@
 #   remove-user EMAIL
 #   list-users
 #   restart               restart the containers
+#   env-export            copy .env to riskmanagement-data/setup/env-edit.txt so you
+#                         can change a setting with Text Editor (.env itself is root-only)
+#   env-apply             move setup/env-edit.txt back into .env, delete it, restart
 #   run SCRIPT [args]     any bin/ script, e.g.  run rm_admin.py list-tokens
 #
 # Only one rmctl command runs at a time; a second one waits up to 2 hours.
@@ -47,7 +50,7 @@ if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
 fi
 
 case "$CMD" in
-  setup|update|status|test|ingest-s3|full-refresh|add-user|remove-user|list-users|restart|run) ;;
+  setup|update|status|test|ingest-s3|full-refresh|add-user|remove-user|list-users|restart|run|env-export|env-apply) ;;
   *) usage; echo; echo "ERROR: unknown command: $CMD"; exit 1 ;;
 esac
 
@@ -176,6 +179,34 @@ case "$CMD" in
     py bin/rm_admin.py remove-user "$1"; rc=$? ;;
   list-users)  py bin/rm_admin.py list-users; rc=$? ;;
   restart)     compose restart; rc=$? ;;
+  env-export)
+    check_env
+    EDIT="$DATA_DIR/setup/env-edit.txt"
+    mkdir -p "$DATA_DIR/setup"
+    cp "$REPO_DIR/.env" "$EDIT" || die "could not copy .env"
+    if getent group administrators >/dev/null 2>&1; then
+      chown root:administrators "$EDIT" && chmod 660 "$EDIT"
+    else
+      chmod 666 "$EDIT"
+    fi
+    say "Copied to File Station: docker > riskmanagement-data > setup > env-edit.txt"
+    say "Edit it with Text Editor, save, then run 'rmctl.sh env-apply' (it holds secrets - don't leave it there)"
+    rc=0 ;;
+  env-apply)
+    EDIT="$DATA_DIR/setup/env-edit.txt"
+    [ -f "$EDIT" ] || die "no setup/env-edit.txt - run 'rmctl.sh env-export' first"
+    sed -i 's/\r$//' "$EDIT"
+    grep -Eq '^RISK_ENCRYPTION_PASSPHRASE=.+' "$EDIT" || die "RISK_ENCRYPTION_PASSPHRASE is empty in env-edit.txt - not applied"
+    old=$(grep -E '^RISK_ENCRYPTION_PASSPHRASE=' "$REPO_DIR/.env" 2>/dev/null)
+    new=$(grep -E '^RISK_ENCRYPTION_PASSPHRASE=' "$EDIT")
+    if [ -n "$old" ] && [ "$old" != "RISK_ENCRYPTION_PASSPHRASE=" ] && [ "$old" != "$new" ] && [ -f "$DATA_DIR/risk.db" ]; then
+      die "RISK_ENCRYPTION_PASSPHRASE differs from the one the warehouse uses - not applied (it must never change)"
+    fi
+    cat "$EDIT" > "$REPO_DIR/.env" && chmod 600 "$REPO_DIR/.env" || die "could not write .env"
+    rm -f "$EDIT"
+    say "Settings saved to .env (root-only); env-edit.txt deleted"
+    step "Recreating the containers so they pick up the new settings"
+    compose up -d --force-recreate "$CONTAINER"; rc=$? ;;
   run)
     [ $# -ge 1 ] || die "usage: rmctl.sh run SCRIPT [args]   e.g. run rm_admin.py list-tokens"
     script="$1"; shift
