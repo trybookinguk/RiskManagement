@@ -265,6 +265,35 @@ def prune_movements(conn, cutoff: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# transfers -> bank_transfers (payouts to organisers; account trust)
+# ---------------------------------------------------------------------------
+
+TRANSFER_COLUMNS = ["AccountId", "DateCreated", "Amount", "Filename"]
+
+
+def load_transfers(conn, source, key: str) -> dict:
+    """Monthly file, rewritten daily: upsert on (account, date, amount, batch file)."""
+    read = written = 0
+    now = db.utcnow()
+    for chunk in read_chunks(source, key, TRANSFER_COLUMNS):
+        _require(chunk, ["AccountId", "DateCreated"], key, source)
+        df = pd.DataFrame({
+            "AccountId": to_int(chunk["AccountId"]),
+            "DateCreated": to_iso(chunk["DateCreated"]),
+            "Amount": to_float(_col(chunk, "Amount")),
+            "Filename": text(_col(chunk, "Filename")).fillna(""),
+        })
+        read += len(chunk)
+        df = df[df["AccountId"].notna() & df["DateCreated"].notna()]
+        df["Amount"] = df["Amount"].map(lambda v: 0.0 if v is None else v)
+        df = df.drop_duplicates(["AccountId", "DateCreated", "Amount", "Filename"])
+        df["UpdatedAt"] = now
+        with conn:
+            written += db.upsert(conn, "bank_transfers", _records(df), ["AccountId", "DateCreated", "Amount", "Filename"])
+    return {"rows_read": read, "rows_written": written}
+
+
+# ---------------------------------------------------------------------------
 # TransactionReconciliation -> gateway_recon (card last 4 guarded)
 # ---------------------------------------------------------------------------
 

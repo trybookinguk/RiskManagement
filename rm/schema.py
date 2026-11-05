@@ -577,4 +577,15 @@ ALTER TABLE booking_transactions ADD COLUMN FileDate TEXT;
 UPDATE booking_transactions SET FileDate = SUBSTR(UpdatedAt, 1, 10);
 """))
 
+MIGRATIONS.append((7, "bank transfers (payouts) per account, lifetime - account trust", """
+CREATE TABLE bank_transfers (            -- S3 transfers, lifetime
+    AccountId          INTEGER NOT NULL,
+    DateCreated        TEXT NOT NULL,
+    Amount             REAL NOT NULL,
+    Filename           TEXT NOT NULL,     -- payout batch file ('' if blank)
+    UpdatedAt          TEXT,
+    PRIMARY KEY (AccountId, DateCreated, Amount, Filename)
+);
+"""))
+
 LATEST_VERSION = MIGRATIONS[-1][0]

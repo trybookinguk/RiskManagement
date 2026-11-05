@@ -8,7 +8,15 @@ Two scores, as in docs/architecture.md:
                                 created -> first session, each gap < 7 days)
                             Booking Outside UK (S3 IPCountry, last 100 bookings)
                             Declines (SharePoint Booking Transactions, last 30 days)
+                            Night-time account creation (new accounts)
+                            Imminent event (new event, first session days away)
+                            High ticket price (average paid per ticket)
+                            Immediate sales (value sold in the first 24h of sales)
+                            No phone numbers (SharePoint bookings without a phone)
                           x M1 account-age multiplier
+                          x trust: bank transfers (payouts) received, past events
+                            and their value. No transfers raises the score; over
+                            5 transfers and a history of events lowers it.
 Review priority (P1-P4) comes from the matrix in architecture.md section 6.4.
 
 Every number lives in CONFIG so it can be tuned; each run records
@@ -36,7 +44,24 @@ CONFIG = {
                      "upper_bound_factor": 0.5},
         "outside_uk_ip": {"weight": 6, "threshold_pct": 20, "sample": 100, "min_evidence": 5},
         "declines": {"weight": 5, "threshold_pct": 20, "days": 30, "min_evidence": 5},
+        "night_created": {"weight": 3, "from_hour": 0, "to_hour": 5,      # created 00:00-04:59 UK time
+                          "max_account_age_days": 90, "times_are": "Europe/London"},   # or "UTC"
+        "imminent_event": {"weight": 5, "max_event_age_days": 14,         # event created in the last 14 days
+                           "days_to_session": [[2, 1.0], [4, 0.7], [7, 0.4]]},   # [[within N days, share of weight]]
+        "high_ticket_price": {"weight": 4, "min_tickets": 5,              # average paid per ticket
+                              "bands": [[100, 1.0], [60, 0.6], [40, 0.3]]},       # [[at least £, share of weight]]
+        "immediate_sales": {"weight": 6, "window_hours": 24, "max_days_since_first_sale": 30,
+                            "bands": [[1000, 1.0], [500, 0.6], [250, 0.3]]},     # £ sold in the first 24h of sales
+        "no_phone": {"weight": 3, "threshold_pct": 50, "min_evidence": 5},  # % of bookings without a phone
+        "points_for_100": 20,      # signal points that make a score of 100 (before multipliers)
         "age_multiplier": [[30, 1.5], [90, 1.3], [365, 1.15]],   # [[under N days, x], ...]
+    },
+    "trust": {     # multiplies the fraud score; account history and payouts
+        "no_transfers": 1.3,                                   # no bank transfer yet = high risk
+        "transfers": [[21, 0.6], [6, 0.8]],                    # [[at least N transfers, x]]; 1-5 -> 1.0
+        "past_events": [[20, 0.8], [5, 0.9]],                  # events whose last session has passed
+        "past_gross": [[100000, 0.7], [20000, 0.8], [5000, 0.9]],   # £ sold for those events
+        "floor": 0.4,                                          # trust never cuts a score by more than 60%
     },
     "bands": {"fraud": [[60, "Critical"], [40, "High"], [20, "Medium"]],
               "exposure": [[70, "Critical"], [45, "High"], [20, "Medium"]]},
@@ -49,6 +74,7 @@ CONFIG = {
 }
 
 _EXPOSURE_ORDER = ["Low", "Medium", "High", "Critical"]
+_PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2, "P4": 3, "-": 4}
 
 
 def _band_points(value, bands):
@@ -117,6 +143,51 @@ def _band_points_less(value, bands):
     return 0
 
 
+def _band_value(value, bands, default=0.0):
+    """First [[at least X, v], ...] band met, highest first."""
+    if value is None:
+        return default
+    for limit, v in bands:
+        if value >= limit:
+            return v
+    return default
+
+
+def night_created(created, cfg=CONFIG):
+    """Hour (UK time) if the account was created in the night window, else None."""
+    n = cfg["fraud"]["night_created"]
+    if not created:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(created)[:19])
+    except ValueError:
+        return None
+    if len(str(created)) <= 10:          # date only: no time to judge
+        return None
+    if n.get("times_are", "Europe/London").upper() == "UTC":
+        from zoneinfo import ZoneInfo
+        dt = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Europe/London")).replace(tzinfo=None)
+    return dt if n["from_hour"] <= dt.hour < n["to_hour"] else None
+
+
+def trust_multiplier(transfers, past_events, past_gross, transfers_seen, cfg=CONFIG):
+    """(multiplier, reason). ``transfers_seen`` is False when the transfers data can't
+    show this account's history (it predates the first transfers file and has past events)."""
+    t = cfg["trust"]
+    if not transfers:
+        if transfers_seen:
+            return t["no_transfers"], "no bank transfers yet"
+        mult, why = 1.0, []
+    else:
+        mult = _band_value(transfers, t["transfers"], 1.0)
+        why = [f"{transfers} bank transfers"]
+    mult *= _band_value(past_events, t["past_events"], 1.0) * _band_value(past_gross, t["past_gross"], 1.0)
+    if past_events:
+        why.append(f"{past_events} past events {_money(past_gross or 0)}")
+    mult = max(t["floor"], mult)
+    return mult, (("trusted: " if mult < 1 else "history: ") + ", ".join(why)) if why else ""
+
+
 def priority(fraud_score, exposure_score, cfg=CONFIG):
     fb = _band(fraud_score, cfg["bands"]["fraud"])
     eb = _band(exposure_score, cfg["bands"]["exposure"])
@@ -145,12 +216,66 @@ def _upcoming_events(conn, today: str):
     return {r["EventId"]: dict(r) for r in rows}
 
 
-def _ip_share(conn, event_ids, uk, sample):
-    if not event_ids:
-        return {}
+def _load_ev(conn, event_ids):
     conn.execute("DROP TABLE IF EXISTS temp._ev")
     conn.execute("CREATE TEMP TABLE _ev (EventId INTEGER PRIMARY KEY)")
     conn.executemany("INSERT INTO temp._ev VALUES (?)", [(e,) for e in event_ids])
+
+
+_PAID = ("COALESCE(PaymentReceived,0) > 0 AND LOWER(COALESCE(Status,'')) NOT LIKE '%refund%' "
+         "AND LOWER(COALESCE(TransactionType,'')) NOT LIKE '%refund%'")
+
+
+def _event_sales(conn, window_hours):
+    """{EventId: (first sale, £ in the first window, £ total, tickets)} for temp._ev events."""
+    rows = conn.execute(f"""
+        WITH paid AS (SELECT EventId, TransactionDate, PaymentReceived, TicketQuantity FROM bookings
+                      WHERE EventId IN (SELECT EventId FROM temp._ev) AND {_PAID}),
+             first AS (SELECT EventId, MIN(TransactionDate) AS f FROM paid GROUP BY EventId)
+        SELECT p.EventId, f.f AS first_sale,
+               SUM(CASE WHEN p.TransactionDate < datetime(f.f, ?) THEN p.PaymentReceived ELSE 0 END) AS early,
+               SUM(p.PaymentReceived) AS gross, SUM(COALESCE(p.TicketQuantity,0)) AS tickets
+        FROM paid p JOIN first f ON f.EventId = p.EventId GROUP BY p.EventId""",
+                        (f"+{int(window_hours)} hours",)).fetchall()
+    return {r["EventId"]: (r["first_sale"], r["early"] or 0, r["gross"] or 0, r["tickets"] or 0) for r in rows}
+
+
+def _no_phone(conn):
+    """{EventId: (bookings, without a phone)} from SharePoint transactions (needs temp._txn_event)."""
+    rows = conn.execute("""
+        SELECT m.EventId, COUNT(*) AS n, SUM(CASE WHEN t.PhoneHash IS NULL THEN 1 ELSE 0 END) AS missing
+        FROM booking_transactions t JOIN temp._txn_event m ON m.BookingGuid = t.BookingGuid
+        WHERE m.EventId IS NOT NULL AND LOWER(COALESCE(t.TransactionType,'')) NOT LIKE '%refund%'
+        GROUP BY m.EventId""").fetchall()
+    return {r["EventId"]: (r["n"], r["missing"]) for r in rows}
+
+
+def _trust_data(conn, today: str):
+    transfers = {r[0]: r[1] for r in conn.execute(
+        "SELECT AccountId, COUNT(*) FROM bank_transfers WHERE DateCreated < ? GROUP BY AccountId", (today,))}
+    since = conn.execute("SELECT MIN(DateCreated) FROM bank_transfers").fetchone()[0]
+    past = {r[0]: (r[1], r[2] or 0) for r in conn.execute("""
+        SELECT e.AccountId, COUNT(*), SUM(COALESCE(l.Gross, 0)) FROM events e
+        LEFT JOIN event_lifetime l ON l.EventId = e.EventId
+        WHERE e.LastSessionDate < ? AND e.AccountId IS NOT NULL GROUP BY e.AccountId""", (today,))}
+    return transfers, since, past
+
+
+def _account_trust(aid, account, transfers, since, past, cfg):
+    n = transfers.get(aid, 0)
+    pe, pg = past.get(aid, (0, 0))
+    created = (account or {}).get("DateTimeCreated")
+    # Zero transfers only counts against an account if the transfers data covers its life,
+    # or it has no event history to vouch for it.
+    seen = bool(since) and (not pe or (created is not None and str(created) >= since))
+    mult, why = trust_multiplier(n, pe, pg, seen, cfg)
+    return mult, why, n, pe, pg
+
+
+def _ip_share(conn, event_ids, uk, sample):
+    if not event_ids:
+        return {}
+    _load_ev(conn, event_ids)
     marks = ",".join("?" * len(uk))
     rows = conn.execute(f"""
         SELECT EventId,
@@ -208,12 +333,21 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
     f = cfg["fraud"]
     events = _upcoming_events(conn, t)
     meta = {r["EventId"]: dict(r) for r in conn.execute(
-        "SELECT EventId, EventName, EventCreated, EventCreatedSource, FirstSessionDate FROM events")} if events else {}
+        "SELECT EventId, EventName, EventCreated, EventCreatedSource, FirstSessionDate, FirstBookingDate FROM events")} if events else {}
     accounts = {r["AccountId"]: dict(r) for r in conn.execute(
         "SELECT a.AccountId, a.AccountName, a.DateTimeCreated, a.AccountStatus, a.TierSystem "
         "FROM accounts a")}
     ip = _ip_share(conn, list(events), cfg["uk_values"], f["outside_uk_ip"]["sample"])
+    sales = _event_sales(conn, f["immediate_sales"]["window_hours"]) if events else {}
     dec = _declines(conn, (today - timedelta(days=f["declines"]["days"])).isoformat())
+    phone = _no_phone(conn)
+    transfers, transfers_since, past = _trust_data(conn, t)
+    trust_cache = {}
+
+    def trust(aid):
+        if aid not in trust_cache:
+            trust_cache[aid] = _account_trust(aid, accounts.get(aid), transfers, transfers_since, past, cfg)
+        return trust_cache[aid]
 
     ev_out = []
     for eid, e in events.items():
@@ -239,11 +373,58 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
             pts += s
             reasons.append(f"{dec_pct:.0f}% declined ({dn}/{att}, {f['declines']['days']}d)")
         mult, age = age_multiplier(a.get("DateTimeCreated"), today, cfg)
+        days_to = _days(t, e["NextSession"])
+
+        nc = f["night_created"]
+        night = night_created(a.get("DateTimeCreated"), cfg)
+        if night and age is not None and age <= nc["max_account_age_days"]:
+            pts += nc["weight"]
+            reasons.append(f"account created {night:%H:%M} (night)")
+
+        ie = f["imminent_event"]
+        created = m.get("EventCreated") or m.get("FirstBookingDate")
+        ev_age = _days(created, t)
+        share = 0.0
+        whole_days = None if days_to is None else int(days_to)       # calendar days, as DaysToSession
+        if ev_age is not None and ev_age <= ie["max_event_age_days"] and whole_days is not None:
+            for limit, sh in ie["days_to_session"]:
+                if whole_days <= limit:
+                    share = sh
+                    break
+        if share:
+            pts += ie["weight"] * share
+            reasons.append(f"event in {max(whole_days, 0)}d, created {int(ev_age)}d ago")
+
+        first_sale, early, gross, tickets = sales.get(eid, (None, 0, 0, 0))
+        hp = f["high_ticket_price"]
+        avg_price = gross / tickets if tickets >= hp["min_tickets"] else None
+        share = _band_value(avg_price, hp["bands"])
+        if share:
+            pts += hp["weight"] * share
+            reasons.append(f"avg ticket {_money(avg_price)}")
+
+        im = f["immediate_sales"]
+        since_first = _days(first_sale, t)
+        share = (_band_value(early, im["bands"])
+                 if since_first is not None and since_first <= im["max_days_since_first_sale"] else 0)
+        if share:
+            pts += im["weight"] * share
+            reasons.append(f"{_money(early)} sold in first {im['window_hours']}h")
+
+        npn = f["no_phone"]
+        pn, pmiss = phone.get(eid, (0, 0))
+        nophone_pct = 100.0 * pmiss / pn if pn >= npn["min_evidence"] else None
+        s = _severity(nophone_pct, npn["threshold_pct"], npn["weight"])
+        if s:
+            pts += s
+            reasons.append(f"{nophone_pct:.0f}% bookings without a phone")
+
         if mult > 1:
             reasons.append(f"new account ({age}d)")
-        max_pts = f["timeline"]["weight"] + f["outside_uk_ip"]["weight"] + f["declines"]["weight"]
-        fraud = round(min(100.0, 100.0 * pts / max_pts * mult), 1)
-        days_to = _days(t, e["NextSession"])
+        tmult, twhy, n_transfers, past_n, past_gross = trust(e["AccountId"])
+        if twhy:
+            reasons.append(twhy)
+        fraud = round(min(100.0, 100.0 * pts / f["points_for_100"] * mult * tmult), 1) if pts else 0.0
         days_pts = 0
         for limit, p in cfg["exposure_event"]["days_to_session"]:
             if days_to is not None and days_to <= limit:
@@ -257,6 +438,9 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
             "DaysToSession": None if days_to is None else int(days_to), "Held": round(e["Held"] or 0, 2),
             "FutureBookings": e["FutureBookings"], "EventCreated": m.get("EventCreated"),
             "EventCreatedSource": m.get("EventCreatedSource"), "Gaps": gaps, "IpPct": ip_pct, "DeclinePct": dec_pct,
+            "AvgTicketPrice": None if avg_price is None else round(avg_price, 2), "FirstDaySales": round(early, 2),
+            "NoPhonePct": nophone_pct, "Transfers": n_transfers, "PastEvents": past_n,
+            "PastGross": round(past_gross, 2), "TrustMultiplier": round(tmult, 2),
             "AgeDays": age, "ExposureScore": exposure, "FraudScore": fraud, "Priority": pr,
             "FraudBand": fb, "ExposureBand": eb, "Reasons": "; ".join(reasons) or "-",
         })
@@ -299,9 +483,14 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
             reasons.append(f"{worst['EventName'] or worst['EventId']}: {worst['Reasons']}")
         if aid in bank_changed:
             reasons.append("bank account changed (90d)")
+        tmult, twhy, n_transfers, past_n, past_gross = trust(aid)
         if not worst and mult > 1:
             reasons.append(f"new account ({age}d)")
+        if not worst and twhy:
+            reasons.append(twhy)
         pr, fb, eb = priority(fraud, exposure, cfg)
+        if worst and _PRIORITY_ORDER[worst["Priority"]] < _PRIORITY_ORDER[pr]:
+            pr = worst["Priority"]           # an account is never lower priority than its worst event
         at_risk = max(b.get("FullBalance") or 0, upcoming or 0, held)
         acc_out.append({
             "AccountId": aid, "AccountName": a.get("AccountName"), "Tier": a.get("TierSystem"),
@@ -311,6 +500,8 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
             "Next14Days": round(near, 2), "AmountAtRisk": round(at_risk, 2), "ExposureScore": exposure,
             "FraudScore": fraud, "Priority": pr, "FraudBand": fb, "ExposureBand": eb,
             "NextSession": min((e["NextSession"] for e in evs), default=None),
+            "Transfers": n_transfers, "PastEvents": past_n, "PastGross": round(past_gross, 2),
+            "TrustMultiplier": round(tmult, 2),
             "Reasons": "; ".join(reasons) or "-",
         })
     order = {"P1": 0, "P2": 1, "P3": 2, "P4": 3, "-": 4}

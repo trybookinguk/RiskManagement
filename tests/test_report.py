@@ -68,7 +68,7 @@ def test_report_email_and_changes(loaded, capsys):
     assert run_report(graph=g) == 0
     to, subj, page = g.mail[0]
     assert to == "henry@trybooking.co.uk"
-    assert subj.startswith("Risk report 2026-11-02: 0 P1 account(s), 1 P1 event(s)")
+    assert subj.startswith("Risk report 2026-11-02: 1 P1 account(s), 1 P1 event(s)")
     for text in ("Top 10 risk accounts", "Top 10 risk events", "New Promoter", "Booking Transactions import check",
                  "UNCLASSIFIED", "Gateway hiccup 42", "event_name"):
         assert text in page
