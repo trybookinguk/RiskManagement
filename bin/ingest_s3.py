@@ -11,13 +11,15 @@ Loads, from the current and previous month's folders:
     RiskReport                 balances (one row per account, dated by the file's S3 date)
     AccountMovementDaily       balance_movements (each daily file not loaded yet)
     TransactionReconciliation  gateway_recon (card last 4 only; 1,100-day retention)
+    transfers                  bank_transfers (payouts per account; lifetime)
 then rebuilds events (incl. EventCreated), account_lifetime and event_lifetime.
 
 First run, and whenever lifetime history needs rebuilding:
     docker exec riskmanagement python3 bin/ingest_s3.py --full-refresh
 streams the newest non-empty BookingDataAll (~2 GB, one chunk in memory at a
 time) plus every BookingData from its month on, and every
-TransactionReconciliation inside the retention window, every month's RiskReport
+TransactionReconciliation inside the retention window, every transfers file,
+every month's RiskReport
 (month-end exposure history) and every AccountMovementDaily in the window.
 
 Other options:
@@ -42,7 +44,8 @@ from rm import config, crypto, db, s3  # noqa: E402
 from rm.ingest import s3_reports as rep  # noqa: E402
 
 log = logging.getLogger("ingest_s3")
-REPORTS = ["BookingData", "Accounts", "users", "RiskReport", "AccountMovementDaily", "TransactionReconciliation"]
+REPORTS = ["BookingData", "Accounts", "users", "RiskReport", "AccountMovementDaily", "TransactionReconciliation",
+           "transfers"]
 SNAPSHOT_LOOKBACK_MONTHS = 7   # how far back to look for a non-empty BookingDataAll
 
 
@@ -116,6 +119,10 @@ def plan(objects, today: date, full_refresh: bool, retention_days: int, only=Non
         for f in s3.files_for(pool, "TransactionReconciliation"):
             if f["period"][:6] >= cutoff:
                 add("TransactionReconciliation", f)
+
+    if want("transfers"):   # lifetime: every month on a full refresh, else this and last month
+        for f in s3.files_for(objects if full_refresh else in_recent, "transfers"):
+            add("transfers", f)
     return steps
 
 
@@ -190,6 +197,8 @@ def main(argv=None) -> int:
                     stats = rep.load_balances(conn, source, key, fdate)
                 elif report == "AccountMovementDaily":
                     stats = rep.load_movements(conn, source, key, fdate)
+                elif report == "transfers":
+                    stats = rep.load_transfers(conn, source, key)
                 else:
                     stats = rep.load_recon(conn, source, key, cutoff)
                 run.update(stats)

@@ -242,11 +242,12 @@ def _table(headers, rows, prio_col=None):
 def _account_rows(r):
     return [[a["Priority"], a["AccountId"], a["AccountName"], a["Tier"], f"{a['FraudScore']:.0f}",
              f"{a['ExposureScore']:.0f}", _m(a["AmountAtRisk"]), _m(a["FullBalance"]), a["UpcomingEvents"],
-             (a["NextSession"] or "")[:10], a["AgeDays"], a["Reasons"]] for a in r["accounts"][:TOP_N]]
+             (a["NextSession"] or "")[:10], a["AgeDays"], a.get("Transfers", 0),
+             f"{a.get('PastEvents', 0)} / {_m(a.get('PastGross', 0))}", a["Reasons"]] for a in r["accounts"][:TOP_N]]
 
 
 _ACC_H = ["Priority", "Account", "Name", "Tier", "Fraud", "Exposure", "At risk", "Full balance", "Upcoming events",
-          "Next session", "Age (days)", "Why"]
+          "Next session", "Age (days)", "Bank transfers", "Past events / value", "Why"]
 
 
 def _event_rows(r):
