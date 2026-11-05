@@ -39,7 +39,7 @@ def print_check(t):
     if not t["rows"]:
         print("  No transactions imported yet.")
         return
-    print(f"  {t['rows']:,} bookings, {t['versions']:,} row versions, {str(t['date_from'])[:10]} to {str(t['date_to'])[:10]}")
+    print(f"  {t['rows']:,} bookings, {t['versions']:,} payment attempts ({t.get('updated', 0):,} updated by a later file), {str(t['date_from'])[:10]} to {str(t['date_to'])[:10]}")
     print(f"  {t['attempts']:,} payment attempts (refunds excluded): {t['declines']:,} declined, "
           f"{t['unclassified']:,} unclassified; {t['refunds']:,} refund rows")
     total = sum(t["match"].values()) or 1

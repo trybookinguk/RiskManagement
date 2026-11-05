@@ -141,6 +141,7 @@ def check_transactions(conn, today: date) -> dict:
                                      SUM(CASE WHEN WaitedInQueue=1 THEN 1 ELSE 0 END) q
                               FROM booking_transactions""").fetchone()
     versions = _one(conn, "SELECT COUNT(*) FROM booking_transaction_history") or 0
+    updated = _one(conn, "SELECT COUNT(*) FROM booking_transaction_history WHERE Versions > 1") or 0
     risk_interim.transaction_event_map(conn)
     match = {r["How"]: r["n"] for r in _q(conn, "SELECT How, COUNT(*) n FROM temp._txn_event GROUP BY How")}
     gw = _one(conn, """SELECT COUNT(*) FROM booking_transactions t
@@ -168,7 +169,7 @@ def check_transactions(conn, today: date) -> dict:
                 "s3_guid_shape": shape(s3_guid) if s3_guid else None,
                 "export_guid_shape": shape(bt_guid) if bt_guid else None}
     return {
-        "rows": n, "versions": versions, "files": files, "last_files": last_files,
+        "rows": n, "versions": versions, "updated": updated, "files": files, "last_files": last_files,
         "date_from": summary["d0"], "date_to": summary["d1"],
         "attempts": attempts["n"], "declines": attempts["dec"] or 0, "unclassified": attempts["unk"] or 0,
         "fill": {"email hash": summary["em"], "phone hash": summary["ph"], "card last 4": summary["c4"],
@@ -325,7 +326,7 @@ def _transactions_html(t) -> str:
         return "".join(out)
     m = t["match"]
     total = sum(m.values()) or 1
-    out.append(f"<p>{t['rows']:,} bookings ({t['versions']:,} row versions), {e(str(t['date_from']))[:10]} to "
+    out.append(f"<p>{t['rows']:,} bookings ({t['versions']:,} payment attempts, {t.get('updated', 0):,} updated by a later file), {e(str(t['date_from']))[:10]} to "
                f"{e(str(t['date_to']))[:10]}. Of {t['attempts']:,} payment attempts (refunds excluded): {t['declines']:,} declined, "
                f"{t['unclassified']:,} unclassified.</p>")
     out.append(_table(["Matched to an event by", "Bookings", "%"],

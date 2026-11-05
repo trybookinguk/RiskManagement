@@ -71,7 +71,7 @@ RiskManagement no longer imports s3reporting at runtime.
 | `balances` | S3 `RiskReport` | (AccountId, snapshot date) | FullBalance, Balance, SalesForUpcomingEvents, Exposure, FutureDays. Kept **daily**, so exposure history is available. |
 | `gateway_recon` | S3 `TransactionReconciliation` | (BookingTransactionId, GatewayId, Transaction) | Card type, **last 4**, amount, gateway message, provider, payout id. **1,100 days.** |
 | `booking_transactions` | SharePoint "Booking Transactions" CSV | **Booking ID** | Latest row per booking: transaction date, gateway id (Stripe or PayPal), merchant ref, card type + **last 4**, CVV check, amount, transaction type, organiser, event, gateway message, **gateway message description (declines)**, status, queue fields (waited, wait time, starting position). First name, last name, email and phone **hashed**. **1,100-day retention.** |
-| `booking_transaction_history` | same | (Booking ID, row hash) | Every distinct version of a row. A decline followed by a successful payment on the same Booking ID keeps both. **1,100 days.** |
+| `booking_transaction_history` | same | AttemptKey = (Booking ID, Transaction Date to the second, Transaction, n-th such row in the file) | One row per payment attempt. A decline followed by a successful payment on the same Booking ID keeps both. Files with overlapping dates never duplicate an attempt: a changed re-export updates it, an older file never overwrites a newer one. **1,100 days.** |
 | `stripe_charges` | Stripe | charge id | created, amount, status, outcome (type, network_status, reason, **risk_level**), description (booking GUID), payment_intent, card (country, brand, funding, last4, **fingerprint**, cvc check, postcode check), billing postcode (outward code plain, full **hashed**), billing email **hashed**, refunded. **1,100 days.** |
 | `stripe_disputes` | Stripe | dispute id | charge, created, amount, reason, status, evidence due |
 | `stripe_efw` | Stripe | warning id | charge, created, fraud_type, actionable |
@@ -173,7 +173,7 @@ For each **CSV** in the folder:
 3. **Reject the file** if any Card Number value has more than 4 digits.
 4. Normalise, then hash the personal fields. In **one transaction**:
    - **Upsert** on **Booking ID** into `booking_transactions`.
-   - Add any new row version to `booking_transaction_history`.
+   - Add new attempts to `booking_transaction_history`; update an attempt already held only if its data changed and the file isn't older.
    - Flag declines from **Gateway Message Description**.
    - Prune rows older than 1,100 days.
 5. Write `import_log`, and only **after the commit succeeds**, delete the file

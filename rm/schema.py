@@ -533,4 +533,48 @@ ALTER TABLE booking_transaction_history_v5 RENAME TO booking_transaction_history
 CREATE INDEX ix_bth_date ON booking_transaction_history(TransactionDate);
 """))
 
+MIGRATIONS.append((6, "Booking Transactions: one row per payment attempt, so overlapping files never duplicate", """
+-- An attempt is (booking GUID, transaction date to the second, transaction type, n-th such row in the file).
+-- The same attempt in a later file updates its row (e.g. Unknown -> Successful) instead of adding one.
+CREATE TABLE booking_transaction_history_v6 (  -- one row per payment attempt, 1,100 days
+    AttemptKey         TEXT PRIMARY KEY,
+    BookingGuid        TEXT NOT NULL,
+    RowHash            TEXT NOT NULL,
+    TransactionDate    TEXT,
+    GatewayId          TEXT,
+    MerchantRefId      TEXT,
+    CardType           TEXT,
+    CardLast4          TEXT,
+    CvvCheck           TEXT,
+    Amount             REAL,
+    TransactionType    TEXT,
+    GatewayMessage     TEXT,
+    GatewayMessageDescription TEXT,
+    IsDecline          INTEGER,
+    Status             TEXT,
+    EmailHash          TEXT,
+    PhoneHash          TEXT,
+    SourceFile         TEXT,
+    FileDate           TEXT,
+    Versions           INTEGER NOT NULL DEFAULT 1,
+    ImportedAt         TEXT,
+    UpdatedAt          TEXT
+);
+INSERT INTO booking_transaction_history_v6
+SELECT BookingGuid || '|' || COALESCE(TransactionDate, '') || '|' || LOWER(COALESCE(TransactionType, '')) || '|' ||
+           (ROW_NUMBER() OVER (PARTITION BY BookingGuid, COALESCE(TransactionDate, ''),
+                                            LOWER(COALESCE(TransactionType, '')) ORDER BY rowid) - 1),
+       BookingGuid, RowHash, TransactionDate, GatewayId, MerchantRefId, CardType, CardLast4, CvvCheck, Amount,
+       TransactionType, GatewayMessage, GatewayMessageDescription, IsDecline, Status, EmailHash, PhoneHash,
+       SourceFile, SUBSTR(ImportedAt, 1, 10), 1, ImportedAt, ImportedAt
+FROM booking_transaction_history;
+DROP TABLE booking_transaction_history;
+ALTER TABLE booking_transaction_history_v6 RENAME TO booking_transaction_history;
+CREATE INDEX ix_bth_date ON booking_transaction_history(TransactionDate);
+CREATE INDEX ix_bth_guid ON booking_transaction_history(BookingGuid);
+
+ALTER TABLE booking_transactions ADD COLUMN FileDate TEXT;
+UPDATE booking_transactions SET FileDate = SUBSTR(UpdatedAt, 1, 10);
+"""))
+
 LATEST_VERSION = MIGRATIONS[-1][0]

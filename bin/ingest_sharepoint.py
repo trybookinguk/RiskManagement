@@ -60,7 +60,9 @@ def import_bytes(conn, hasher, data: bytes, name: str, cutoff: str, dry_run: boo
         db.finish_import(conn, run_id, "failed", message=f"{type(e).__name__}: {e}")
         raise
     db.finish_import(conn, run_id, "ok", stats["rows_read"], stats["rows_written"],
-                     f"{stats['bookings']} bookings, {stats['new_versions']} new versions, {stats['declines']} declines")
+                     f"{stats['bookings']} bookings, {stats['new_attempts']} new attempts, "
+                     f"{stats['updated_attempts']} updated, {stats['unchanged_attempts']} already held, "
+                     f"{stats['declines']} declines")
     stats.update(duplicate=False, checksum=checksum, date_order=df.attrs.get("date_order"))
     return stats
 
@@ -165,7 +167,8 @@ def main(argv=None, graph=None) -> int:
                 print(f"  + {name}: {s['rows_read']:,} rows, {s['bookings']:,} bookings, {s['declines']:,} declines, "
                       f"dates read as {'day/month' if s.get('date_order') == 'dmy' else 'month/day'}/year"
                       + (" (dry run - not stored, not deleted)" if args.dry_run else
-                         f"; {s['new_versions']:,} new versions, {s['rows_written']:,} latest rows updated"))
+                         f"; {s['new_attempts']:,} new attempts, {s['updated_attempts']:,} updated, "
+                         f"{s['unchanged_attempts']:,} already held (overlap)"))
             if not args.dry_run:
                 try:
                     graph.delete(item["id"])
