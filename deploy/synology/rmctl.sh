@@ -21,7 +21,11 @@
 #   ingest-sharepoint [options]  import Booking Transactions CSVs from SharePoint (e.g. --dry-run)
 #   report [--no-email]   nightly risk report: changes, top 10 accounts/events, import health (emailed)
 #   check-transactions    Booking Transactions import check (values, matching, declines)
-#   add-user EMAIL [viewer|admin]
+#   web-start             start (or restart) the dashboard on port 8085 (WEB_PORT)
+#   web-stop              stop the dashboard
+#   web-status            is the dashboard running, and does /api/health answer
+#   create-token NAME     API / dashboard sign-in token for NAME (shown once)
+#   add-user EMAIL [viewer|admin]   allow a Microsoft sign-in to the dashboard
 #   remove-user EMAIL
 #   list-users
 #   restart               restart the containers
@@ -38,6 +42,7 @@ REPO_DIR="${REPO_DIR:-/volume1/docker/RiskManagement}"
 DATA_DIR="${DATA_DIR:-/volume1/docker/riskmanagement-data}"
 COMPOSE_DIR="$REPO_DIR/deploy/synology"
 CONTAINER="riskmanagement"
+WEB="riskmanagement-web"
 LOG_DIR="$DATA_DIR/logs"
 KEEP_LOGS=60
 export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
@@ -54,7 +59,7 @@ if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
 fi
 
 case "$CMD" in
-  setup|update|status|test|ingest-s3|ingest-sharepoint|report|check-transactions|full-refresh|add-user|remove-user|list-users|restart|run|env-export|env-apply) ;;
+  setup|update|status|test|ingest-s3|ingest-sharepoint|report|check-transactions|full-refresh|add-user|remove-user|list-users|restart|run|env-export|env-apply|web-start|web-stop|web-status|create-token) ;;
   *) usage; echo; echo "ERROR: unknown command: $CMD"; exit 1 ;;
 esac
 
@@ -122,6 +127,16 @@ ensure_up() {
 
 in_container() { docker exec "$CONTAINER" "$@"; }
 
+web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$WEB" 2>/dev/null)" = "true" ]; }
+
+# The dashboard reads the code at start-up: restart it after an update so it runs the new code.
+web_refresh() {
+  if web_running; then
+    step "Restarting the dashboard with the new code"
+    compose --profile web up -d --force-recreate "$WEB" || say "WARNING: could not restart the dashboard"
+  fi
+}
+
 py() { ensure_up; in_container python3 "$@"; }
 
 image_inputs_hash() {
@@ -168,7 +183,44 @@ case "$CMD" in
     step "Upgrading the warehouse"
     py bin/rm_admin.py init-db
     rc=$?
+    web_refresh
     ;;
+  web-start)
+    check_env
+    ensure_up
+    step "Starting the dashboard"
+    compose --profile web up -d --force-recreate "$WEB" || die "could not start the dashboard"
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 2
+      if docker exec "$WEB" python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=3).status == 200 else 1)" 2>/dev/null; then
+        say "Dashboard is up: http://<NAS address>:${WEB_PORT:-8085}/  (sign in with a token from 'rmctl.sh create-token NAME')"
+        break
+      fi
+      [ $i -eq 10 ] && { docker logs --tail 40 "$WEB"; die "dashboard did not answer /api/health"; }
+    done
+    rc=0 ;;
+  web-stop)
+    compose --profile web stop "$WEB"; rc=$? ;;
+  web-status)
+    if web_running; then
+      say "Dashboard container is running"
+      docker exec "$WEB" python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=5).read().decode())"
+      rc=$?
+      docker logs --tail 15 "$WEB"
+    else
+      say "Dashboard is not running (start it with: rmctl.sh web-start)"; rc=1
+    fi ;;
+  create-token)
+    [ $# -ge 1 ] || die "usage: rmctl.sh create-token NAME"
+    mkdir -p "$DATA_DIR/setup"
+    py bin/rm_admin.py create-token "$*" --out /data/setup/token.txt; rc=$?
+    if [ $rc -eq 0 ]; then
+      if getent group administrators >/dev/null 2>&1; then
+        chown root:administrators "$DATA_DIR/setup/token.txt" && chmod 640 "$DATA_DIR/setup/token.txt"
+      fi
+      say "Open File Station: docker > riskmanagement-data > setup > token.txt, copy the token into the"
+      say "password manager, then DELETE token.txt. The token is not in this log or the task email."
+    fi ;;
   status)      py bin/rm_admin.py status; rc=$? ;;
   test)        ensure_up; in_container python3 -m pytest -q -p no:cacheprovider; rc=$? ;;
   ingest-s3)   py bin/ingest_s3.py "$@"; rc=$? ;;
@@ -213,7 +265,8 @@ case "$CMD" in
     rm -f "$EDIT"
     say "Settings saved to .env (root-only); env-edit.txt deleted"
     step "Recreating the containers so they pick up the new settings"
-    compose up -d --force-recreate "$CONTAINER"; rc=$? ;;
+    compose up -d --force-recreate "$CONTAINER"; rc=$?
+    web_refresh ;;
   run)
     [ $# -ge 1 ] || die "usage: rmctl.sh run SCRIPT [args]   e.g. run rm_admin.py list-tokens"
     script="$1"; shift

@@ -73,6 +73,10 @@ class Settings:
     report_email: str = "henry@trybooking.co.uk"
     timezone: str = "Europe/London"
     web_port: int = 8085
+    # Dashboard sign-in with Microsoft (optional; token sign-in works without it)
+    web_entra_client_id: str = ""
+    web_entra_client_secret: str = field(default="", repr=False)
+    web_base_url: str = ""
 
     _ENV = {
         "data_dir": "RISK_DATA_DIR",
@@ -93,6 +97,9 @@ class Settings:
         "report_email": "REPORT_EMAIL",
         "timezone": "RISK_TIMEZONE",
         "web_port": "WEB_PORT",
+        "web_entra_client_id": "WEB_ENTRA_CLIENT_ID",
+        "web_entra_client_secret": "WEB_ENTRA_CLIENT_SECRET",
+        "web_base_url": "WEB_BASE_URL",
     }
 
     @classmethod

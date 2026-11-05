@@ -121,6 +121,15 @@ def cmd_create_token(settings, args):
         conn.execute("INSERT INTO api_tokens(TokenId, Name, TokenHash, CreatedAt) VALUES (?,?,?,?)",
                      (token_id, args.name, hashlib.sha256(full.encode()).hexdigest(), db.utcnow()))
     conn.close()
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"Dashboard / API token for {args.name} ({token_id}):\n\n{full}\n\n"
+                    "Copy it into the password manager, then DELETE THIS FILE.\n"
+                    "Dashboard: paste it on the sign-in page. Scripts: Authorization: Bearer <token>\n")
+        print(f"Token {token_id} for {args.name!r} written to {args.out} (not shown here, so it stays out of logs).")
+        return 0
     print(f"Token for {args.name!r} (shown once - store it in the password manager):\n\n  {full}\n")
     print("Use it as:  Authorization: Bearer <token>")
     return 0
@@ -161,6 +170,7 @@ def main(argv=None) -> int:
     sub.add_parser("list-users")
     t = sub.add_parser("create-token", help="Create an API token for scripts.")
     t.add_argument("name")
+    t.add_argument("--out", help="write the token to this file (mode 600) instead of printing it")
     rv = sub.add_parser("revoke-token")
     rv.add_argument("token_id")
     sub.add_parser("list-tokens")

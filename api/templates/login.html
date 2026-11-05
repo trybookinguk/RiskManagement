@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block body %}
+<div class="card" style="max-width: 460px; margin: 40px auto">
+  <h1>Sign in</h1>
+  {% set messages = {'token': "That token isn't valid or has been revoked.",
+                     'not_allowed': "Your Microsoft account isn't on the dashboard list. Ask an admin to run rmctl.sh add-user.",
+                     'microsoft': "Microsoft sign-in didn't complete. Try again.",
+                     'expired': "The sign-in took too long. Try again."} %}
+  {% if error %}<p class="err">{{ messages.get(error, 'Sign-in failed.') }}</p>{% endif %}
+  {% if entra %}
+  <p><a href="/auth/start?next={{ next | urlencode }}"><button type="button">Sign in with Microsoft</button></a></p>
+  <p class="muted">Or use an API token:</p>
+  {% endif %}
+  <form action="/login" method="post">
+    <input type="hidden" name="next" value="{{ next }}">
+    <p><input type="password" name="token" placeholder="tok_…" autocomplete="off" required></p>
+    <p><button type="submit">Sign in with token</button></p>
+  </form>
+  <p class="muted">Tokens are made on the NAS: <code>rmctl.sh run rm_admin.py create-token "Your name"</code>.</p>
+</div>
+{% endblock %}

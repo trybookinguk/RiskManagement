@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set active = 'imports' %}
+{% block title %}Imports{% endblock %}
+{% block body %}
+<h1>Imports</h1>
+<div class="card tablewrap">
+  <h2>Last run per source</h2>
+  <table><thead><tr><th>Source</th><th>Status</th><th>Started</th><th>File / ref</th><th class="n">Read</th><th class="n">Written</th><th>Message</th></tr></thead><tbody>
+  {% for r in i.last %}
+  <tr><td>{{ r.source }}</td><td class="{{ 'bad' if r.status == 'failed' }}">{{ r.status }}</td><td>{{ r.started_at | d(16) }}</td>
+    <td class="muted">{{ r.ref or '' }}</td><td class="n">{{ r.rows_read | num }}</td><td class="n">{{ r.rows_written | num }}</td>
+    <td class="muted">{{ (r.message or '')[:160] }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% if i.failed %}
+<div class="card tablewrap">
+  <h2>Recent failures</h2>
+  <table><thead><tr><th>Source</th><th>When</th><th>File / ref</th><th>Message</th></tr></thead><tbody>
+  {% for r in i.failed %}
+  <tr><td>{{ r.source }}</td><td>{{ r.started_at | d(16) }}</td><td class="muted">{{ r.ref or '' }}</td><td class="muted">{{ (r.message or '')[:240] }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% endif %}
+<div class="card tablewrap">
+  <h2>Recent runs</h2>
+  <table><thead><tr><th>Source</th><th>Status</th><th>Started</th><th>File / ref</th><th class="n">Read</th><th class="n">Written</th></tr></thead><tbody>
+  {% for r in i.recent %}
+  <tr><td>{{ r.source }}</td><td class="{{ 'bad' if r.status == 'failed' }}">{{ r.status }}</td><td>{{ r.started_at | d(16) }}</td>
+    <td class="muted">{{ r.ref or '' }}</td><td class="n">{{ r.rows_read | num }}</td><td class="n">{{ r.rows_written | num }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}

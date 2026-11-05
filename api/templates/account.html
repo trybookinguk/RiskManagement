@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% set acc = a.account %}
+{% block title %}{{ acc.AccountName or acc.AccountId }}{% endblock %}
+{% block body %}
+<h1>{{ acc.AccountName or 'Account' }} <span class="muted">· {{ acc.AccountId }}</span></h1>
+<p class="sub">{{ acc.AccountStatus or 'status unknown' }} · {{ acc.TierSystem or 'no tier' }}
+  · created {{ acc.DateTimeCreated | d(16) }} · {{ acc.Industry or '' }} {{ ('/ ' ~ acc.SubIndustry) if acc.SubIndustry }}</p>
+
+{% if a.latest %}
+<div class="card">
+  <div class="stats">
+    <div class="stat"><b><span class="pill {{ a.latest.Priority }}">{{ a.latest.Priority }}</span></b><span>priority on {{ a.latest.RunDate }}</span></div>
+    <div class="stat"><b>{{ a.latest.FraudScore | num(1) }}</b><span>fraud score</span></div>
+    <div class="stat"><b>{{ a.latest.ExposureScore | num }}</b><span>exposure score</span></div>
+    <div class="stat"><b>{{ a.latest.AmountAtRisk | money }}</b><span>at risk</span></div>
+  </div>
+  {% if a.latest.Reasons and a.latest.Reasons != '-' %}
+  <ul class="reasons">{% for r in a.latest.Reasons.split('; ') %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% else %}
+<div class="card muted">Not scored in any report yet: no upcoming events and no balance.</div>
+{% endif %}
+
+<div class="grid2">
+  <div class="card">
+    <h2>Timeline</h2>
+    <table>
+      {% for g in a.timeline %}
+      <tr><td>{{ g.label }}</td><td>{{ g.date | d(16) }}</td>
+        <td class="n {{ 'bad' if g.gap is not none and g.gap < 7 }}">{% if g.gap is not none %}+{{ g.gap | num }} days{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="card">
+    <h2>Trust</h2>
+    <dl class="kv">
+      <dt>Bank transfers</dt><dd>{{ a.transfers.count }} ({{ a.transfers.total | money }}){% if a.transfers.last %}, last {{ a.transfers.last | d }}{% endif %}
+        {% if a.transfers.data_since %}<br><span class="muted">transfer data from {{ a.transfers.data_since | d }}</span>{% endif %}</dd>
+      <dt>Past events</dt><dd>{{ a.past.events }} ({{ a.past.gross | money }})</dd>
+      {% if a.lifetime %}
+      <dt>Lifetime</dt><dd>{{ a.lifetime.Events | num }} events, {{ a.lifetime.Bookings | num }} bookings, {{ a.lifetime.Gross | money }}</dd>
+      <dt>Refunded</dt><dd>{{ a.lifetime.RefundedBookings | num }} bookings</dd>
+      <dt>Overseas IPs</dt><dd>{{ a.lifetime.ForeignIpBookings | num }} bookings</dd>
+      {% endif %}
+      <dt>Verified</dt><dd>{{ 'yes' if acc.IsVerified else 'no' }}</dd>
+      <dt>Bank account</dt><dd>{{ 'deleted' if acc.BankAccountIsDeleted else 'status ' ~ (acc.BankAccountStatusId if acc.BankAccountStatusId is not none else '?') }}</dd>
+      <dt>Users</dt><dd>{% for u in a.users %}{{ u.RoleName or 'user' }}{{ ' (deleted)' if u.IsDeleted }}, last login {{ u.LastLoginDatetime | d(16) }}<br>{% else %}-{% endfor %}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="grid2" style="margin-top: 14px">
+  <div class="card">
+    <h2>Balance{% if a.balance %} <span class="muted">· {{ a.balance.FullBalance | money }} on {{ a.balance.SnapshotDate }}</span>{% endif %}</h2>
+    {{ chart(balance_points, money=True) if balance_points else '' }}
+    {% if a.balance %}
+    <dl class="kv">
+      <dt>Full balance</dt><dd>{{ a.balance.FullBalance | money }}</dd>
+      <dt>Sales for upcoming events</dt><dd>{{ a.balance.SalesForUpcomingEvents | money }}</dd>
+      <dt>Exposure (RiskReport)</dt><dd>{{ a.balance.Exposure | money }}</dd>
+    </dl>
+    {% else %}<p class="muted">No balance snapshots.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Fraud score history</h2>
+    {{ chart(score_points, max_value=100) if score_points else '' }}
+    {% if score_points | length < 2 %}<p class="muted">The chart builds up as the daily report runs ({{ score_points | length }} so far).</p>{% endif %}
+  </div>
+</div>
+
+<div class="card tablewrap" style="margin-top: 14px">
+  <h2>Events <span class="muted">· {{ a.events | length }}{{ '+' if a.events | length == 200 }}</span></h2>
+  <table>
+    <thead><tr><th>Event</th><th>Created</th><th>First session</th><th>Last session</th><th class="n">Bookings</th>
+      <th class="n">Sold</th><th>Priority</th><th class="n">Fraud</th><th class="n">Held</th></tr></thead>
+    <tbody>
+    {% for e in a.events %}
+    <tr><td><a href="/events/{{ e.EventId }}">{{ e.EventName or e.EventId }}</a><br><span class="muted">{{ e.EventId }}</span></td>
+      <td>{{ e.EventCreated | d }}<br><span class="muted">{{ e.EventCreatedSource or '' }}</span></td>
+      <td>{{ e.FirstSessionDate | d }}</td><td>{{ e.LastSessionDate | d }}</td>
+      <td class="n">{{ e.Bookings | num }}</td><td class="n">{{ e.Gross | money }}</td>
+      <td>{% if e.Priority %}<span class="pill {{ e.Priority }}">{{ e.Priority }}</span>{% endif %}</td>
+      <td class="n">{{ e.FraudScore | num(1) if e.FraudScore is not none else '' }}</td>
+      <td class="n">{{ e.AmountAtRisk | money if e.AmountAtRisk is not none else '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if a.transfers.recent %}
+<div class="card tablewrap">
+  <h2>Recent bank transfers</h2>
+  <table><thead><tr><th>Date</th><th class="n">Amount</th></tr></thead><tbody>
+  {% for t in a.transfers.recent %}<tr><td>{{ t.DateCreated | d(16) }}</td><td class="n">{{ t.Amount | money }}</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+{% endif %}
+{% endblock %}

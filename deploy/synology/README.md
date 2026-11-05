@@ -6,7 +6,7 @@ Pi. It has one Docker image and two containers:
 | Container | Does | Starts |
 | --- | --- | --- |
 | `riskmanagement` | Worker. The nightly import jobs run inside it with `docker exec`. | always |
-| `riskmanagement-web` | Dashboard + JSON API | from build step 5 (`--profile web`) |
+| `riskmanagement-web` | Dashboard + JSON API on port 8085 | `rmctl.sh web-start` (section 7) |
 
 | On the NAS | In the containers |
 | --- | --- |
@@ -131,7 +131,9 @@ added in build steps 4 and 6.
 | `check-transactions` | Booking Transactions import check only: files, match rate to S3 bookings, how each Gateway Message Description is classified, and the Status, CVV and card type values |
 | `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
 | `full-refresh` | One-off lifetime load from BookingDataAll |
-| `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |
+| `web-start`, `web-stop`, `web-status` | Start (or restart), stop, or check the dashboard (section 7) |
+| `create-token NAME` | Dashboard / API token, written to **riskmanagement-data → setup → token.txt** (never to the log or email). Copy it into the password manager, then delete the file. Revoke with `run rm_admin.py revoke-token tok_…` |
+| `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Who may use *Sign in with Microsoft* (once it's set up) |
 | `restart` | Restart the containers |
 | `env-export`, then `env-apply` | Change a setting: `env-export` copies `.env` to `setup/env-edit.txt` for Text Editor. `env-apply` puts it back (root-only), deletes the copy and restarts the worker. It refuses to change `RISK_ENCRYPTION_PASSPHRASE` once the warehouse exists. |
 | `run SCRIPT [args]` | Any `bin/` script, e.g. `run rm_admin.py create-token power-bi` |
@@ -150,6 +152,44 @@ container, in the browser.
 Run the **RiskManagement update** task. It pulls the latest code, rebuilds the
 image only when needed, and applies any warehouse upgrade. The weekly
 schedule does this automatically.
+
+## 7. Dashboard
+
+The dashboard shows the latest risk report as a list of accounts and events, plus:
+- an **account page**: scores and their reasons, timeline, trust (bank transfers, past events), balance and score history, events
+- an **event page**: scores, timeline, sales (average ticket, first 24 hours), payment attempts, bookings
+- a **booking page**: S3 rows, payment attempts, reconciliation
+- **search**: account, event or booking number, booking ID, gateway id, `VISA 1234`, email or phone (hashed, never logged), or a name
+- **Imports**
+
+Every page has a JSON twin under `/api/...`.
+
+How it's protected:
+- It opens `risk.db` **read-only**.
+- No customer personal data appears anywhere.
+- Every request is written to **logs → web-audit-YYYYMM.log**. Search terms are stored only as a hash.
+
+**Start it** with three tasks, each run once by hand:
+1. `rmctl.sh update`
+2. `rmctl.sh create-token "Henry"`. Open **setup → token.txt** in File Station, copy the token to the password manager, then delete the file.
+3. `rmctl.sh web-start`. It finishes with "Dashboard is up".
+
+Then browse to `http://<NAS address>:8085/` and paste the token. You stay signed in for 12 hours, or until the dashboard restarts.
+
+**On the network:** keep it on the LAN or VPN. **Never port-forward 8085 to the internet.** For HTTPS and a proper name:
+1. Go to DSM → Control Panel → Login Portal → Advanced → **Reverse Proxy** → Create.
+2. Set the source to `HTTPS`, `risk.<nas-hostname>`, port 443.
+3. Set the destination to `HTTP`, `localhost`, port 8085.
+
+**Sign in with Microsoft (optional, later):**
+1. Create an Entra app registration with the redirect URI `https://risk.<nas-hostname>/auth/callback`.
+2. Put its client id and secret, and `WEB_BASE_URL=https://risk.<nas-hostname>`, into `.env` (`env-export` / `env-apply`).
+3. Run `web-start`.
+4. Allow people with `rmctl.sh add-user name@trybooking.co.uk viewer` (or `admin`, which adds the Imports page).
+
+Token sign-in keeps working alongside Microsoft sign-in.
+
+`update` restarts the dashboard automatically when it's running, so it always runs the latest code.
 
 ## Legacy report
 
@@ -210,7 +250,7 @@ From then on, the nightly 04:10 task (below) loads only the current and
 previous month. That takes about a minute. Rerun `--full-refresh` only if
 TryBooking corrects old data.
 
-**7. Allow yourself on the dashboard** (used from step 5):
+**7. Allow yourself on the dashboard** (Microsoft sign-in, see section 7):
 ```bash
 docker exec riskmanagement python3 bin/rm_admin.py add-user henry@trybooking.co.uk --role admin
 ```

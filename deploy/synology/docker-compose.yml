@@ -23,8 +23,8 @@ services:
       - /volume1/docker/riskmanagement-data:/data
     working_dir: /app
 
-  # Dashboard + JSON API. Arrives in build step 5; start it then with
-  #   sudo docker compose --profile web up -d
+  # Dashboard + JSON API (step 3c). Start, stop, check from Task Scheduler:
+  #   rmctl.sh web-start | web-stop | web-status
   riskmanagement-web:
     image: riskmanagement:latest
     container_name: riskmanagement-web
@@ -42,6 +42,6 @@ services:
       # even for readers. The app itself opens risk.db read-only (mode=ro).
       - /volume1/docker/riskmanagement-data:/data
     working_dir: /app
-    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers"]
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers", "--forwarded-allow-ips", "*"]
     ports:
       - "8085:8085"

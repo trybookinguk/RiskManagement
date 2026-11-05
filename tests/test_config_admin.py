@@ -76,3 +76,18 @@ def test_admin_wrong_passphrase(env, monkeypatch, capsys):
     monkeypatch.setenv("RISK_ENCRYPTION_PASSPHRASE", "changed")
     assert adm.main(["init-db"]) == 1
     assert "does not match" in capsys.readouterr().out
+
+
+def test_create_token_to_file_keeps_it_out_of_output(env, capsys):
+    import importlib.util, os, pathlib, stat
+    spec = importlib.util.spec_from_file_location(
+        "rm_admin", pathlib.Path(__file__).resolve().parents[1] / "bin" / "rm_admin.py")
+    adm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adm)
+    assert adm.main(["init-db"]) == 0
+    out = env / "setup" / "token.txt"
+    assert adm.main(["create-token", "Henry", "--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    token = [l for l in out.read_text().splitlines() if l.startswith("tok_")][0]
+    assert "." in token and token not in printed and token.split(".")[0] in printed
+    assert stat.S_IMODE(os.stat(out).st_mode) == 0o600
