@@ -98,3 +98,13 @@ def test_reasons_show_points(scenario):
     good = {e["EventId"]: e for e in r["events"]}[400]
     assert good["Reasons"].endswith("trusted: 24 bank transfers, 12 past events £60,000 x0.43")
     print("\n" + bad["Reasons"] + "\n" + good["Reasons"], bad["FraudScore"], good["FraudScore"], good["Priority"])
+
+
+def test_duplicate_event_names():
+    events = {1: {"AccountId": 9, "NextSession": "2026-11-07 22:00:00"},
+              2: {"AccountId": 9, "NextSession": "2026-11-07 23:00:00"},
+              3: {"AccountId": 9, "NextSession": "2026-11-14 22:00:00"},     # weekly copy: not a duplicate
+              4: {"AccountId": 8, "NextSession": "2026-11-07 22:00:00"}}     # other account
+    meta = {1: {"EventName": "MIDNIGHT MADNESS"}, 2: {"EventName": "Midnight  Madness."},
+            3: {"EventName": "MIDNIGHT MADNESS"}, 4: {"EventName": "MIDNIGHT MADNESS"}}
+    assert risk_interim.duplicate_events(events, meta, 1) == {1: [2], 2: [1]}
