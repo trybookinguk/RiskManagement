@@ -41,6 +41,7 @@ CONTAINER="riskmanagement"
 LOG_DIR="$DATA_DIR/logs"
 KEEP_LOGS=60
 export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+export HOME="${HOME:-/root}"   # Task Scheduler leaves HOME unset; docker warns about .dockercfg without it
 
 CMD="${1:-help}"
 [ $# -gt 0 ] && shift

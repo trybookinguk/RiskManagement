@@ -16,7 +16,7 @@ from collections import defaultdict
 import pandas as pd
 
 from .. import crypto, db
-from ..s3 import canonical_guid, read_chunks, text, to_bool, to_float, to_int, to_iso
+from ..s3 import canonical_guid, describe_head, read_chunks, text, to_bool, to_float, to_int, to_iso
 
 log = logging.getLogger(__name__)
 
@@ -51,10 +51,16 @@ def _col(chunk, name):
     return chunk[name] if name in chunk.columns else pd.Series([None] * len(chunk), index=chunk.index, dtype=object)
 
 
-def _require(chunk, names, key):
+def _require(chunk, names, key, source=None):
     missing = [n for n in names if n not in chunk.columns]
     if missing:
-        raise ValueError(f"{key}: missing required columns {missing}")
+        msg = f"{key}: missing required columns {missing}"
+        if source is not None:
+            try:
+                msg += f". File starts: {describe_head(source.head_bytes(key, 4096))}"
+            except Exception:  # the description is only a hint
+                pass
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +137,7 @@ def load_accounts(conn, source, key: str, snapshot_date: str) -> dict:
     now = db.utcnow()
     for chunk in read_chunks(source, key, ACCOUNT_COLUMNS):
         idcol = "Id" if "Id" in chunk.columns else "AccountId"
-        _require(chunk, [idcol], key)
+        _require(chunk, [idcol], key, source)
         df = pd.DataFrame({
             "AccountId": to_int(chunk[idcol]),
             "AccountName": text(_col(chunk, "AccountName")),
@@ -176,7 +182,7 @@ def load_users(conn, hasher, source, key: str) -> dict:
     read = written = 0
     now = db.utcnow()
     for chunk in read_chunks(source, key, USER_COLUMNS):
-        _require(chunk, ["UserId"], key)
+        _require(chunk, ["UserId"], key, source)
         df = pd.DataFrame({
             "UserId": to_int(chunk["UserId"]),
             "AccountId": to_int(_col(chunk, "AccountId")),
@@ -205,7 +211,7 @@ def load_balances(conn, source, key: str, snapshot_date: str) -> dict:
     read = written = 0
     for chunk in read_chunks(source, key, BALANCE_COLUMNS):
         idcol = "AccountId" if "AccountId" in chunk.columns else "AccountID"
-        _require(chunk, [idcol], key)
+        _require(chunk, [idcol], key, source)
         df = pd.DataFrame({
             "AccountId": to_int(chunk[idcol]),
             "FullBalance": to_float(_col(chunk, "FullBalance")),
@@ -242,7 +248,7 @@ def load_movements(conn, source, key: str, movement_date: str) -> dict:
     """One daily file (the date comes from its name). Has a gateway preamble line."""
     read = written = 0
     for chunk in read_chunks(source, key, list(MOVEMENT_COLUMNS)):
-        _require(chunk, ["AccountId"], key)
+        _require(chunk, ["AccountId"], key, source)
         df = pd.DataFrame({dst: (to_int(chunk[src]) if dst == "AccountId" else to_float(_col(chunk, src)))
                            for src, dst in MOVEMENT_COLUMNS.items()})
         df = df[df["AccountId"].notna()]
@@ -272,7 +278,7 @@ def load_recon(conn, source, key: str, cutoff: str) -> dict:
     frames = []
     read = 0
     for chunk in read_chunks(source, key, RECON_COLUMNS):
-        _require(chunk, ["BookingTransactionId"], key)
+        _require(chunk, ["BookingTransactionId"], key, source)
         df = pd.DataFrame({
             "BookingTransactionId": to_int(chunk["BookingTransactionId"]),
             "GatewayId": text(_col(chunk, "GatewayId")).fillna(""),
@@ -322,7 +328,7 @@ def rebuild_events(conn) -> int:
                MIN(b.EventDate) AS FirstSessionDate, MAX(b.EventDate) AS LastSessionDate,
                MIN(b.TransactionDate) AS FirstBookingDate, MAX(b.TransactionDate) AS LastBookingDate,
                MAX(b.EventPostcodeOutward) AS EventPostcodeOutward
-        FROM bookings b LEFT JOIN event_names n ON n.EventId = b.EventId
+        FROM bookings b NOT INDEXED LEFT JOIN event_names n ON n.EventId = b.EventId
         WHERE b.EventId IS NOT NULL GROUP BY b.EventId""").fetchall()
     accounts = {r["AccountId"]: (r["FirstEventCreation"], r["LastEventCreation"]) for r in conn.execute(
         "SELECT AccountId, FirstEventCreation, LastEventCreation FROM accounts")}
@@ -393,7 +399,7 @@ def rebuild_lifetime(conn) -> dict:
                    SUM(CASE WHEN COALESCE(PaymentReceived,0) > 0 THEN 1 ELSE 0 END),
                    SUM(COALESCE(TicketQuantity,0)), ROUND(SUM(COALESCE(PaymentReceived,0)), 2),
                    SUM({refunded}), SUM({foreign}), ?
-            FROM bookings WHERE EventId IS NOT NULL GROUP BY EventId""", (now,))
+            FROM bookings NOT INDEXED WHERE EventId IS NOT NULL GROUP BY EventId""", (now,))
         conn.execute("DELETE FROM account_lifetime")
         conn.execute(f"""
             INSERT INTO account_lifetime (AccountId, Events, Bookings, PaidBookings, Tickets, Gross,
@@ -403,7 +409,7 @@ def rebuild_lifetime(conn) -> dict:
                    SUM(CASE WHEN COALESCE(PaymentReceived,0) > 0 THEN 1 ELSE 0 END),
                    SUM(COALESCE(TicketQuantity,0)), ROUND(SUM(COALESCE(PaymentReceived,0)), 2),
                    SUM({refunded}), SUM({foreign}), MIN(TransactionDate), MAX(TransactionDate), ?
-            FROM bookings WHERE AccountId IS NOT NULL GROUP BY AccountId""", (now,))
+            FROM bookings NOT INDEXED WHERE AccountId IS NOT NULL GROUP BY AccountId""", (now,))
     return {
         "events": conn.execute("SELECT COUNT(*) FROM event_lifetime").fetchone()[0],
         "accounts": conn.execute("SELECT COUNT(*) FROM account_lifetime").fetchone()[0],
