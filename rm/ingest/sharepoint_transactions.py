@@ -3,9 +3,16 @@
 One CSV row per payment attempt. The warehouse keeps:
     booking_transactions          the latest row per booking (the export's
                                   "Booking ID" is the booking GUID = S3 BookingUrlId)
-    booking_transaction_history   every distinct version of a row, so a decline
+    booking_transaction_history   one row per payment attempt, so a decline
                                   followed by a successful payment on the same
                                   Booking ID keeps both
+
+An attempt is identified by (booking GUID, Transaction Date to the second,
+Transaction, n-th such row in the file). Files with overlapping date ranges
+therefore never duplicate an attempt: the same attempt in a later file updates
+its row (e.g. Unknown -> Successful), identical rows change nothing, and an
+older file never overwrites data from a newer one (file date from the name,
+e.g. 3_Nov_26_..., else the import date).
 Both are pruned to PAYMENT_RETENTION_DAYS (1,100).
 
 Personal data (first/last name, email, phone) is hashed on the way in. The
@@ -218,51 +225,76 @@ def parse(data: bytes, hasher, filename: str = None) -> pd.DataFrame:
     out["IsDecline"] = [is_decline(d, s) for d, s in zip(out["GatewayMessageDescription"], out["Status"])]
     out = out.astype(object).where(out.notna(), None)
     out["RowHash"] = [_row_hash(r) for r in out.to_dict("records")]
+    out["AttemptKey"] = attempt_keys(out)
     out["_order"] = range(len(out))
     return out
+
+
+def attempt_keys(df: pd.DataFrame) -> list:
+    """'guid|date|type|n': n counts rows with the same guid, date and type earlier in the
+    file, so two genuine attempts in the same second stay two attempts."""
+    base = (df["BookingGuid"].astype(str) + "|" + df["TransactionDate"].fillna("").astype(str) + "|"
+            + df["TransactionType"].fillna("").astype(str).str.lower())
+    n = base.groupby(base, sort=False).cumcount()
+    return (base + "|" + n.astype(str)).tolist()
 
 
 _LATEST_COLS = ["BookingGuid", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4", "CvvCheck",
                 "Amount", "TransactionType", "EventOrganiser", "EventName", "GatewayMessage",
                 "GatewayMessageDescription", "IsDecline", "Status", "FirstNameHash", "LastNameHash", "EmailHash",
                 "PhoneHash", "WaitedInQueue", "WaitTime", "StartingPosition", "RowHash", "SourceFile",
-                "FirstSeenAt", "UpdatedAt"]
-_HISTORY_COLS = ["BookingGuid", "RowHash", "TransactionDate", "GatewayId", "MerchantRefId", "CardType", "CardLast4",
-                 "CvvCheck", "Amount", "TransactionType", "GatewayMessage", "GatewayMessageDescription", "IsDecline",
-                 "Status", "EmailHash", "PhoneHash", "SourceFile", "ImportedAt"]
+                "FileDate", "FirstSeenAt", "UpdatedAt"]
+_HISTORY_COLS = ["AttemptKey", "BookingGuid", "RowHash", "TransactionDate", "GatewayId", "MerchantRefId", "CardType",
+                 "CardLast4", "CvvCheck", "Amount", "TransactionType", "GatewayMessage", "GatewayMessageDescription",
+                 "IsDecline", "Status", "EmailHash", "PhoneHash", "SourceFile", "FileDate", "ImportedAt", "UpdatedAt"]
 
 
-def store(conn, df: pd.DataFrame, source_file: str) -> dict:
+def store(conn, df: pd.DataFrame, source_file: str, file_date: str = None) -> dict:
     """Write a parsed file. Call inside ``with conn:`` so it commits or rolls back as one.
 
-    Latest row per Booking ID = newest Transaction Date (file order breaks ties).
-    An older row never replaces a newer one already in the warehouse.
+    Attempts: new ones are added; one already stored is updated only if its data
+    changed and this file isn't older than the one that stored it.
+    Latest row per Booking ID = newest Transaction Date (file order breaks ties;
+    on an equal date the newer file wins). An older row never replaces a newer one.
     """
     now = db.utcnow()
+    if not file_date:
+        named = date_from_name(source_file)
+        file_date = named.isoformat() if named else now[:10]
     df = df.copy()
     df["SourceFile"] = source_file
+    df["FileDate"] = file_date
     df["FirstSeenAt"] = now
     df["UpdatedAt"] = now
     df["ImportedAt"] = now
 
-    hist = [tuple(r[c] for c in _HISTORY_COLS) for r in df.to_dict("records")]
-    before = conn.total_changes
-    conn.executemany(f"INSERT INTO booking_transaction_history ({', '.join(_HISTORY_COLS)}) "
-                     f"VALUES ({', '.join('?' * len(_HISTORY_COLS))}) ON CONFLICT (BookingGuid, RowHash) DO NOTHING",
-                     hist)
-    new_versions = conn.total_changes - before
+    upd = [c for c in _HISTORY_COLS if c not in ("AttemptKey", "BookingGuid", "ImportedAt")]
+    count = "SELECT COUNT(*) FROM booking_transaction_history"
+    before_rows, before = conn.execute(count).fetchone()[0], conn.total_changes
+    conn.executemany(
+        f"INSERT INTO booking_transaction_history ({', '.join(_HISTORY_COLS)}) "
+        f"VALUES ({', '.join('?' * len(_HISTORY_COLS))}) ON CONFLICT (AttemptKey) DO UPDATE SET "
+        f"{', '.join(f'{c}=excluded.{c}' for c in upd)}, Versions = booking_transaction_history.Versions + 1 "
+        f"WHERE excluded.RowHash <> booking_transaction_history.RowHash "
+        f"AND excluded.FileDate >= COALESCE(booking_transaction_history.FileDate, '')",
+        [tuple(r[c] for c in _HISTORY_COLS) for r in df.to_dict("records")])
+    new_attempts = conn.execute(count).fetchone()[0] - before_rows
+    updated_attempts = conn.total_changes - before - new_attempts
 
     latest = (df.assign(_d=df["TransactionDate"].fillna(""))
                 .sort_values(["BookingGuid", "_d", "_order"])
                 .drop_duplicates("BookingGuid", keep="last"))
     upd = [c for c in _LATEST_COLS if c not in ("BookingGuid", "FirstSeenAt")]
+    old_d, new_d = "COALESCE(booking_transactions.TransactionDate, '')", "COALESCE(excluded.TransactionDate, '')"
     sql = (f"INSERT INTO booking_transactions ({', '.join(_LATEST_COLS)}) VALUES ({', '.join('?' * len(_LATEST_COLS))}) "
            f"ON CONFLICT (BookingGuid) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in upd)} "
-           f"WHERE COALESCE(excluded.TransactionDate, '') >= COALESCE(booking_transactions.TransactionDate, '')")
+           f"WHERE excluded.RowHash <> booking_transactions.RowHash AND ({new_d} > {old_d} OR ({new_d} = {old_d} "
+           f"AND excluded.FileDate >= COALESCE(booking_transactions.FileDate, '')))")
     before = conn.total_changes
     conn.executemany(sql, [tuple(r[c] for c in _LATEST_COLS) for r in latest.to_dict("records")])
     changed = conn.total_changes - before
-    return {"rows_read": len(df), "rows_written": changed, "new_versions": new_versions,
+    return {"rows_read": len(df), "rows_written": changed, "new_attempts": new_attempts,
+            "updated_attempts": updated_attempts, "unchanged_attempts": len(df) - new_attempts - updated_attempts,
             "bookings": int(latest.shape[0]), "declines": int(sum(1 for v in df["IsDecline"] if v == 1))}
 
 

@@ -384,3 +384,59 @@ def test_transactions_link_to_s3_bookings_by_guid(env, tmp_path):
     assert [tuple(r) for r in conn.execute("SELECT BookingGuid, EventId, How FROM temp._txn_event")] == \
         [(guid(42), 90, "booking_guid")]
     conn.close()
+
+
+# ------------------------------------------------ overlapping export files ---
+
+def _attempts(conn):
+    return conn.execute("SELECT COUNT(*), SUM(IsDecline) FROM booking_transaction_history").fetchone()
+
+
+def test_overlapping_files_do_not_duplicate_attempts(env):
+    """2 Nov file covers 1-2 Nov; 4 Nov file covers 2-4 Nov. The 2 Nov rows appear in both
+    (one re-exported with its status settled), and booking 3 has two attempts in the same second."""
+    day1 = [row(1, "11/01/2026 09:00:00"),
+            row(2, "11/02/2026 10:00:00", desc="S1 - Unknown Reason", status="Failed"),
+            row(2, "11/02/2026 10:05:00"),
+            row(3, "11/02/2026 11:00:00", desc="", status="Unknown", **{"Gateway ID": ""})]
+    day2 = [row(2, "11/02/2026 10:00:00", desc="S1 - Unknown Reason", status="Failed"),   # same attempt, same data
+            row(2, "11/02/2026 10:05:00", email="JANE@example.com "),                     # same attempt, email re-cased
+            row(3, "11/02/2026 11:00:00"),                                                # Unknown -> Successful
+            row(4, "11/04/2026 12:00:00", desc="S2 - Details Incorrect", status="Failed"),
+            row(4, "11/04/2026 12:00:00", desc="S2 - Details Incorrect", status="Failed"),  # 2 tries, same second
+            row(4, "11/04/2026 12:01:00")]
+    g = FakeGraph({"2_Nov_26_BookingTransactionsReport.csv": to_csv(day1)})
+    assert run(g, today="2026-11-03") == 0
+    g = FakeGraph({"4_Nov_26_BookingTransactionsReport.csv": to_csv(day2)})
+    assert run(g, today="2026-11-05") == 0
+    conn = open_db()
+    assert tuple(_attempts(conn)) == (7, 3)        # attempts: booking 1: 1, 2: 2, 3: 1, 4: 3
+    r = conn.execute("SELECT Status, IsDecline, GatewayId FROM booking_transaction_history WHERE BookingGuid=?",
+                     (guid(3),)).fetchall()
+    assert [tuple(x) for x in r] == [("Success", 0, "ch_3")]      # settled status replaced the Unknown row
+    assert conn.execute("SELECT Status FROM booking_transactions WHERE BookingGuid=?", (guid(3),)).fetchone()[0] \
+        == "Success"
+    assert conn.execute("SELECT COUNT(*) FROM booking_transactions").fetchone()[0] == 4
+
+    # Re-importing the older file afterwards changes nothing (older data never overwrites newer).
+    g = FakeGraph({"2_Nov_26_BookingTransactionsReport (1).csv": to_csv(day1, crlf=True)})
+    assert run(g, today="2026-11-05") == 0
+    assert tuple(_attempts(conn)) == (7, 3)
+    assert conn.execute("SELECT Status FROM booking_transaction_history WHERE BookingGuid=?",
+                        (guid(3),)).fetchone()[0] == "Success"
+    conn.close()
+
+
+def test_check_reports_overlap_updates(env, capsys):
+    a = [row(3, "11/02/2026 11:00:00", desc="", status="Unknown")]
+    b = [row(3, "11/02/2026 11:00:00"), row(5, "11/03/2026 09:00:00")]
+    assert run(FakeGraph({"2_Nov_26_BookingTransactionsReport.csv": to_csv(a)})) == 0
+    assert run(FakeGraph({"3_Nov_26_BookingTransactionsReport.csv": to_csv(b)})) == 0
+    out = capsys.readouterr().out
+    assert "1 new attempts, 1 updated, 0 already held" in out
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("risk_report", ROOT / "bin" / "risk_report.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main(["--check-transactions", "--today", "2026-11-05"]) == 0
+    assert "2 payment attempts (1 updated by a later file)" in capsys.readouterr().out

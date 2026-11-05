@@ -141,3 +141,27 @@ def test_upgrade_to_v5_converts_ids_and_guids(env, monkeypatch):
     assert tuple(conn.execute("SELECT BookingGuid, Status FROM booking_transactions").fetchone()) == ("7", "Success")
     assert conn.execute("SELECT BookingGuid FROM booking_transaction_history").fetchone()[0] == "7"
     conn.close()
+
+
+def test_upgrade_to_v6_keys_history_by_attempt(env, monkeypatch):
+    s = config.get_settings()
+    conn = db.connect(s.risk_db)
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS[:5])
+    monkeypatch.setattr(db, "LATEST_VERSION", 5)
+    db.init_db(conn, s.risk_passphrase)
+    g = "caded601-55c4-4ff5-b40f-add2310abb4a"
+    with conn:
+        conn.execute("INSERT INTO booking_transactions(BookingGuid, Status, UpdatedAt) "
+                     "VALUES (?, 'Successful', '2026-11-05 16:01:24')", (g,))
+        for h, st in (("h1", "Failed"), ("h2", "Failed"), ("h3", "Successful")):
+            conn.execute("INSERT INTO booking_transaction_history(BookingGuid, RowHash, TransactionDate, "
+                         "TransactionType, Status, ImportedAt) VALUES (?, ?, ?, 'Payment', ?, '2026-11-05 16:01:24')",
+                         (g, h, "2026-11-03 10:00:00" if h != "h3" else "2026-11-03 10:01:00", st))
+    monkeypatch.setattr(db, "MIGRATIONS", schema.MIGRATIONS)
+    monkeypatch.setattr(db, "LATEST_VERSION", schema.LATEST_VERSION)
+    assert 6 in db.migrate(conn)
+    keys = [r[0] for r in conn.execute("SELECT AttemptKey FROM booking_transaction_history ORDER BY 1")]
+    assert keys == [f"{g}|2026-11-03 10:00:00|payment|0", f"{g}|2026-11-03 10:00:00|payment|1",
+                    f"{g}|2026-11-03 10:01:00|payment|0"]
+    assert conn.execute("SELECT FileDate FROM booking_transactions").fetchone()[0] == "2026-11-05"
+    conn.close()
