@@ -306,3 +306,11 @@ def test_bad_client_id_is_reported_not_sent_to_microsoft(scenario, entra_env, mo
     assert "WEB_ENTRA_CLIENT_ID isn't a complete ID: it has 8-4-4-4-11 characters" in page
     assert "Sign in with Microsoft</a>" not in page
     assert client.get("/auth/start").status_code == 503
+
+
+def test_role_refusal_says_which_roles_arrived(site):
+    sign_in(site, roles=["risk.admin", "Default"])
+    page = html.unescape(site.get("/login").text)
+    assert "(risk.analyst@trybooking.co.uk)" in page and "Roles in this sign-in: risk.admin, Default" in page
+    sign_in(site, roles=None)
+    assert "Roles in this sign-in: none" in html.unescape(site.get("/login").text)
