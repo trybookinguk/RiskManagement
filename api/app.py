@@ -60,6 +60,21 @@ def _date(v, n=10):
     return (str(v) or "")[:n] if v else "-"
 
 
+def _inline_css() -> str:
+    """app.css with the Figtree font embedded, put into every page's <style>.
+
+    Embedded rather than linked so the look never depends on a second request:
+    ngrok's free plan answers browser requests for /static/... with its warning
+    page, and the browser then drops the stylesheet (seen on 6 Nov 2026)."""
+    import base64
+    static = os.path.join(HERE, "static")
+    with open(os.path.join(static, "app.css"), encoding="utf-8") as f:
+        css = f.read()
+    with open(os.path.join(static, "figtree-latin.woff2"), "rb") as f:
+        font = base64.b64encode(f.read()).decode()
+    return css.replace("url(/static/figtree-latin.woff2)", f"url(data:font/woff2;base64,{font})")
+
+
 def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAPI:
     settings = settings or config.get_settings()
     signer = auth.Signer()
@@ -74,7 +89,8 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
     templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
     app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
     templates.env.filters.update(money=_money, num=_num, d=_date)
-    templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None, config_problems=problems)
+    templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None,
+                                 config_problems=problems, page_css=Markup(_inline_css()))
 
     def connect():
         if not os.path.exists(settings.risk_db):
@@ -148,7 +164,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
+        response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; "
                                                        "img-src 'self' "
                                                        "data:; form-action 'self' https://login.microsoftonline.com; "
                                                        "frame-ancestors 'none'")
