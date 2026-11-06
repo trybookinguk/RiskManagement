@@ -177,13 +177,13 @@ How it's protected:
 
 **Set-up** is in [docs/entra_sso_setup.md](../../docs/entra_sso_setup.md):
 1. the Entra app registration, roles and Conditional Access (Microsoft 365 admin)
-2. DNS for `risk.trybooking.co.uk`
-3. a Let's Encrypt certificate in DSM (needs **port 80 only** forwarded to the NAS)
-4. the DSM reverse proxy from 443 to 8085
+2. the Synology DDNS address `https://trybooking.synology.me:8443`
+3. a Let's Encrypt certificate for it in DSM
+4. the DSM reverse proxy from 8443 to 8085
 5. the `WEB_*` settings in `.env`
 6. `rmctl.sh web-start`
 
-Keep 443 and 8085 LAN/VPN-only, and **never port-forward them**.
+Keep 8443 and 8085 LAN/VPN-only, and **never port-forward them**.
 
 `update` restarts the dashboard automatically when it's running, so it always runs the latest code.
 
