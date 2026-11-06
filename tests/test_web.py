@@ -318,11 +318,12 @@ def test_role_refusal_says_which_roles_arrived(site):
 
 def test_trybooking_styling_served_locally(viewer):
     page = viewer.get("/").text
-    assert '<link rel="stylesheet" href="/static/app.css">' in page and "<svg" in page and ">Overview</a>" in page
-    assert "trybooking.com" not in page                                           # nothing loaded from the public site
+    assert "<style>" in page and "--tb-blue-600" in page and "data:font/woff2;base64," in page   # embedded, no 2nd request
+    assert 'rel="stylesheet"' not in page and "<svg" in page and ">Overview</a>" in page
+    assert "://www.trybooking.com" not in page and "://trybooking.com" not in page   # nothing loaded from the public site
     css = viewer.get("/static/app.css")
     assert css.status_code == 200 and "Figtree" in css.text and "#0c76fe" in css.text
     assert css.headers["Cache-Control"].startswith("public")
     assert viewer.get("/static/figtree-latin.woff2").status_code == 200
     csp = viewer.get("/").headers["Content-Security-Policy"]
-    assert "font-src 'self'" in csp and "style-src 'self'" in csp
+    assert "font-src 'self' data:" in csp and "style-src 'self' 'unsafe-inline'" in csp
