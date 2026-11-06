@@ -314,3 +314,15 @@ def test_role_refusal_says_which_roles_arrived(site):
     assert "(risk.analyst@trybooking.co.uk)" in page and "Roles in this sign-in: risk.admin, Default" in page
     sign_in(site, roles=None)
     assert "Roles in this sign-in: none" in html.unescape(site.get("/login").text)
+
+
+def test_trybooking_styling_served_locally(viewer):
+    page = viewer.get("/").text
+    assert '<link rel="stylesheet" href="/static/app.css">' in page and "<svg" in page and ">Overview</a>" in page
+    assert "trybooking.com" not in page                                           # nothing loaded from the public site
+    css = viewer.get("/static/app.css")
+    assert css.status_code == 200 and "Figtree" in css.text and "#0c76fe" in css.text
+    assert css.headers["Cache-Control"].startswith("public")
+    assert viewer.get("/static/figtree-latin.woff2").status_code == 200
+    csp = viewer.get("/").headers["Content-Security-Policy"]
+    assert "font-src 'self'" in csp and "style-src 'self'" in csp

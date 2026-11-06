@@ -5,95 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{% block title %}Risk{% endblock %} · RiskManagement</title>
-<style>
-:root {
-  --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2330; --muted: #5d6778; --line: #e2e6ec;
-  --accent: #2459c4; --accent-ink: #ffffff;
-  --p1: #b4232a; --p1-bg: #fde8e8; --p2: #b35c00; --p2-bg: #fff1dc;
-  --p3: #806b00; --p3-bg: #fbf6d6; --p4: #33615a; --p4-bg: #e4f3ef; --p0: #5d6778; --p0-bg: #eef0f3;
-  --chart: #2459c4; --grid: #e2e6ec;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12161d; --panel: #1a2029; --ink: #e5e9f0; --muted: #9aa5b5; --line: #2b3340;
-    --accent: #6f9bff; --accent-ink: #0d1117;
-    --p1: #ff8a8a; --p1-bg: #3a1c1f; --p2: #ffb35c; --p2-bg: #3a2a14; --p3: #e8d26a; --p3-bg: #333016;
-    --p4: #7fd1c2; --p4-bg: #16302b; --p0: #9aa5b5; --p0-bg: #232a35;
-    --chart: #6f9bff; --grid: #2b3340;
-  }
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-header { background: var(--panel); border-bottom: 1px solid var(--line); }
-.bar { max-width: 1280px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 16px; align-items: center;
-  flex-wrap: wrap; }
-.brand { font-weight: 700; color: var(--ink); }
-nav a { margin-right: 12px; color: var(--muted); }
-nav a.on { color: var(--ink); font-weight: 600; }
-.bar form.search { flex: 1; min-width: 220px; display: flex; }
-input[type=search], input[type=text], input[type=password] { width: 100%; padding: 7px 10px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
-button { padding: 7px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-ink);
-  font: inherit; cursor: pointer; }
-button.link { background: none; color: var(--muted); padding: 0; }
-a.button { display: inline-block; padding: 9px 16px; border-radius: 6px; background: var(--accent);
-  color: var(--accent-ink); font-weight: 600; }
-a.button:hover { text-decoration: none; opacity: .92; }
-.who { color: var(--muted); font-size: 13px; display: flex; gap: 10px; align-items: center; }
-main { max-width: 1280px; margin: 0 auto; padding: 16px; }
-h1 { font-size: 22px; margin: 4px 0 12px; }
-h2 { font-size: 16px; margin: 0 0 10px; }
-.sub { color: var(--muted); margin: -8px 0 14px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
-  margin-bottom: 14px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
-.grid2 > .card { margin-bottom: 0; }
-.stats { display: flex; flex-wrap: wrap; gap: 10px 26px; }
-.stat b { display: block; font-size: 20px; }
-.stat span { color: var(--muted); font-size: 13px; }
-dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
-dl.kv dt { color: var(--muted); }
-dl.kv dd { margin: 0; }
-.tablewrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
-  white-space: nowrap; }
-td.n, th.n { text-align: right; white-space: nowrap; }
-td.why { color: var(--muted); font-size: 13px; min-width: 320px; }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-weight: 700; font-size: 12px; }
-.P1 { color: var(--p1); background: var(--p1-bg); } .P2 { color: var(--p2); background: var(--p2-bg); }
-.P3 { color: var(--p3); background: var(--p3-bg); } .P4 { color: var(--p4); background: var(--p4-bg); }
-.P- { color: var(--p0); background: var(--p0-bg); }
-.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-.tabs a { padding: 4px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line);
-  color: var(--ink); }
-.tabs a.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.muted { color: var(--muted); }
-.bad { color: var(--p1); font-weight: 600; }
-.reasons li { margin-bottom: 3px; }
-svg.chart { width: 100%; height: auto; display: block; }
-svg.chart .line { fill: none; stroke: var(--chart); stroke-width: 2; }
-svg.chart circle { fill: var(--chart); }
-svg.chart .grid { stroke: var(--grid); }
-svg.chart text { fill: var(--muted); font-size: 11px; }
-.pager { margin-top: 10px; display: flex; gap: 14px; }
-.err { color: var(--p1); }
-@media (max-width: 640px) {
-  .bar { gap: 8px; } nav a { margin-right: 8px; } td.why { min-width: 220px; }
-}
-</style>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" type="image/png" href="/static/favicon.png">
 </head>
 <body>
 <header>
   <div class="bar">
-    <a class="brand" href="/">RiskManagement</a>
+    <a class="brand" href="/" aria-label="TryBooking Risk">{% include "_logo.svg" %}<span class="product">Risk</span></a>
     {% if user %}
     <nav>
-      <a href="/" class="{{ 'on' if active == 'risk' }}">Risk</a>
+      <a href="/" class="{{ 'on' if active == 'risk' }}">Overview</a>
       {% if user.role == 'admin' %}<a href="/imports" class="{{ 'on' if active == 'imports' }}">Imports</a>{% endif %}
     </nav>
     <form class="search" action="/search" method="get" role="search">

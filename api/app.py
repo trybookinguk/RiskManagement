@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
@@ -71,6 +72,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
 
     app = FastAPI(title="RiskManagement", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
+    app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
     templates.env.filters.update(money=_money, num=_num, d=_date)
     templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None, config_problems=problems)
 
@@ -146,16 +148,18 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self' "
+        response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
+                                                       "img-src 'self' "
                                                        "data:; form-action 'self' https://login.microsoftonline.com; "
                                                        "frame-ancestors 'none'")
-        response.headers["Cache-Control"] = "no-store"
+        static = request.url.path.startswith("/static/")
+        response.headers["Cache-Control"] = "public, max-age=86400" if static else "no-store"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         if https_site:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         u = getattr(request.state, "user", None)
-        if request.url.path not in ("/api/health", "/favicon.ico", "/login", "/signed-out"):
+        if not static and request.url.path not in ("/api/health", "/favicon.ico", "/login", "/signed-out"):
             audit.write(u["who"] if u else None, request.method, request.url.path, request.url.query,
                         response.status_code, int((time.monotonic() - t0) * 1000))
         return response
