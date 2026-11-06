@@ -114,11 +114,24 @@ the NAS's free Synology DDNS name, so no company DNS record is needed.
 1. In **DSM → Control Panel → External Access → DDNS**, check that the entry
    `trybooking.synology.me` shows **Normal**. If it doesn't, edit it and tick
    **Heartbeat**.
-2. **From inside the office:** the name resolves to the office's public IP.
-   Browsers on the LAN reach the NAS only if the router supports **NAT
-   loopback** (hairpin), and most do. Test it in step 9. If the page doesn't
-   load from the LAN, add a local DNS entry on the router (or the VPN's DNS)
-   pointing `trybooking.synology.me` at the NAS's LAN IP.
+2. **Inside the office, a local DNS entry is required.** Public DNS points
+   `trybooking.synology.me` at the office's public IP. Port 8443 is
+   deliberately **not** forwarded, so the router refuses it
+   (`ERR_CONNECTION_REFUSED`). NAT loopback doesn't help, because it only
+   covers forwarded ports. Point the name at the NAS's **LAN IP** inside:
+   - **Router:** a Local DNS / DNS host mapping / static host entry,
+     `trybooking.synology.me` → NAS LAN IP. This is best, and covers everyone.
+   - **No such router feature:** the DSM **DNS Server** package (a zone
+     `trybooking.synology.me` with an A record to the NAS LAN IP, forwarders
+     to the ISP, and DHCP handing out the NAS as DNS). Or a hosts-file line on
+     each PC that needs the dashboard (Windows:
+     `C:\Windows\System32\drivers\etc\hosts`, edited as administrator):
+     `<NAS LAN IP>  trybooking.synology.me`
+   - **VPN users:** add the same entry to the VPN's DNS.
+
+   Check with `nslookup trybooking.synology.me`: inside the office it should
+   return the LAN IP. From a phone on mobile data, `:8443` should **not**
+   connect.
 
 ## 6. Certificate (Let's Encrypt via DSM)
 
