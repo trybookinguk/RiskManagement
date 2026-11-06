@@ -117,7 +117,8 @@ def test_sign_in_required(site):
     assert r.status_code == 303 and r.headers["location"].startswith("/login")
     r = site.get("/api/risk")
     assert r.status_code == 401 and "login.microsoftonline.com" in r.headers["WWW-Authenticate"]
-    assert site.get("/api/health").json()["sign_in"] == "microsoft"
+    assert site.get("/api/health").json() == {"ok": True}                       # public: nothing more
+    assert site.get("/api/status").status_code == 401
     login = site.get("/login").text
     assert "Sign in with Microsoft" in login and "tok_" not in login and 'name="token"' not in login
     assert site.post("/login", data={"token": "tok_x.y"}).status_code == 405      # token sign-in is gone
@@ -175,7 +176,7 @@ def test_not_configured(scenario, monkeypatch):
     client = TestClient(create_app(config.get_settings(), today=TODAY))
     assert "isn't set up on this server yet" in html.unescape(client.get("/login").text)
     assert client.get("/auth/start").status_code == 503
-    assert client.get("/api/health").json()["sign_in"] == "not configured"
+    assert client.get("/api/health").json() == {"ok": True}
     assert client.get("/api/risk", headers={"Authorization": f"Bearer {access_token()}"}).status_code == 401
 
 
@@ -272,3 +273,26 @@ def test_api_refuses_forged_and_static_tokens(site):
     assert _api(site, "not-a-jwt").status_code == 401
     hs = jwt.encode({"tid": TENANT, "aud": CLIENT}, "s" * 32, algorithm="HS256")             # algorithm swap
     assert _api(site, hs).status_code == 401
+
+
+def test_internet_facing_hardening(viewer):
+    r = viewer.get("/")
+    assert r.headers["Strict-Transport-Security"].startswith("max-age=")
+    assert "camera=()" in r.headers["Permissions-Policy"]
+    status = viewer.get("/api/status").json()
+    assert status["sign_in"] == "microsoft" and status["schema"] >= 7
+    # Requests for any other host name (scanners hitting the IP, Host-header tricks) get nothing.
+    assert viewer.get("/", headers={"host": "145.224.66.149:8443"}).status_code == 400
+    assert viewer.get("/api/health", headers={"host": "evil.example"}).status_code == 400
+    assert viewer.get("/api/health", headers={"host": "localhost:8085"}).json() == {"ok": True}   # rmctl web-status
+
+
+def test_cookie_secure_even_if_proxy_says_http(scenario, entra_env):
+    from fastapi.testclient import TestClient as TC
+    from api.app import create_app
+    s = config.get_settings()
+    client = TC(create_app(s, entra=FakeEntra(), today=TODAY, api_tokens=auth.ApiTokens(s, jwks=FakeJWKS())),
+                base_url="http://risk.trybooking.co.uk")
+    client.entra = FakeEntra()
+    r = sign_in(client)
+    assert "Secure" in r.headers["set-cookie"]

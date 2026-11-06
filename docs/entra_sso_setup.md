@@ -106,51 +106,78 @@ Hand these over through the password manager, not by email:
 
 ---
 
-## 5. Address: Synology DDNS (no trybooking.co.uk DNS change)
+## 5. Address: Synology DDNS, reachable from anywhere
 
-The dashboard's address is **`https://trybooking.synology.me:8443`**. It uses
-the NAS's free Synology DDNS name, so no company DNS record is needed.
+The dashboard's address is **`https://trybooking.synology.me:8443`**. It works
+in the office and remotely. It uses the NAS's free Synology DDNS name, so no
+company DNS record is needed.
 
-1. In **DSM → Control Panel → External Access → DDNS**, check that the entry
-   `trybooking.synology.me` shows **Normal**. If it doesn't, edit it and tick
-   **Heartbeat**.
-2. **From inside the office:** the name resolves to the office's public IP.
-   Browsers on the LAN reach the NAS only if the router supports **NAT
-   loopback** (hairpin), and most do. Test it in step 9. If the page doesn't
-   load from the LAN, add a local DNS entry on the router (or the VPN's DNS)
-   pointing `trybooking.synology.me` at the NAS's LAN IP.
+**What protects it from the internet:**
+- **Microsoft SSO:** TryBooking tenant, @trybooking.co.uk, app role, and MFA
+  enforced by Conditional Access and checked by the app.
+- **DSM firewall:** port 8443 only from the UK (step 7).
+- **Before sign-in, the app shows nothing:** only the sign-in page and
+  `/api/health` (`{"ok": true}`) answer. Requests for any other host name,
+  such as scanners hitting the bare IP, are refused.
+- **Only 8443 is forwarded.** DSM itself (5000/5001), SSH and the dashboard's
+  internal port 8085 stay private.
+
+Steps:
+1. In **DSM → Control Panel → External Access → DDNS**, check that
+   `trybooking.synology.me` shows **Normal** with **Heartbeat** on.
+2. **Router:** forward **TCP 8443** (external) to the **NAS LAN IP, port
+   8443**. Forward nothing else, apart from port 80 if step 6 needs it.
+3. **In the office:** browsers use the same address through the router (NAT
+   loopback). If your router doesn't support loopback, the page won't load
+   from the office. In that case, add a local DNS entry on the router
+   (`trybooking.synology.me` → NAS LAN IP), or a hosts-file line on the PCs:
+   `<NAS LAN IP>  trybooking.synology.me`
 
 ## 6. Certificate (Let's Encrypt via DSM)
 
 1. Go to **DSM → Control Panel → Security → Certificate**. If there's no
-   certificate for `trybooking.synology.me` (the DDNS wizard usually makes one),
-   choose **Add → Add a new certificate → Get a certificate from Let's
+   certificate for `trybooking.synology.me` (the DDNS wizard usually makes
+   one), choose **Add → Add a new certificate → Get a certificate from Let's
    Encrypt**, with domain `trybooking.synology.me` and email
    `henry@trybooking.co.uk`.
 2. DSM renews it automatically. For synology.me names, recent DSM versions do
-   this without any port being opened. **If DSM reports a Let's Encrypt
-   error**, forward TCP **port 80 only** to the NAS on the router, both for the
-   first certificate and for renewals. Never forward 8443 or 8085.
+   this without opening any port. **If DSM reports a Let's Encrypt error**, also
+   forward **TCP 80** to the NAS.
+   - Don't country-limit port 80. Let's Encrypt checks from several countries.
 
-## 7. Reverse proxy (HTTPS 8443 → dashboard)
+## 7. Reverse proxy and firewall
 
-Go to **DSM → Control Panel → Login Portal → Advanced → Reverse Proxy →
-Create**:
+**Reverse proxy.** Go to **DSM → Control Panel → Login Portal → Advanced →
+Reverse Proxy → Create**:
 
 | | Protocol | Hostname | Port |
 | --- | --- | --- | --- |
 | Source | HTTPS | `trybooking.synology.me` | **8443** |
 | Destination | HTTP | `localhost` | 8085 |
 
-Tick **Enable HSTS**. Port 8443 keeps it clear of DSM's own 443/5001.
+Tick **Enable HSTS**. Then in **Security → Certificate → Settings**, set this
+entry to use the `trybooking.synology.me` certificate.
 
-Then:
+**Firewall.** Go to **DSM → Control Panel → Security → Firewall → Enable
+firewall → Edit rules** (on the profile used by the LAN interface). Put these
+rules in this order, above any existing allow-all rule:
 
-1. In **Security → Certificate → Settings**, set the reverse proxy entry
-   `trybooking.synology.me:8443` to use the `trybooking.synology.me`
-   certificate.
-2. In **Security → Firewall**, allow 8443 (and 8085) **only from the office
-   and VPN subnets**. Don't port-forward 8443 or 8085 on the router.
+| # | Ports | Source | Action |
+| --- | --- | --- | --- |
+| 1 | All | Your office LAN subnet, e.g. `192.168.1.0/24` | Allow |
+| 2 | Custom: TCP 8443 | **Location: United Kingdom** | Allow |
+| 3 | Custom: TCP 8443 | All | **Deny** |
+| 4 | Custom: TCP 80 (only if forwarded for step 6) | All | Allow |
+
+Keep your existing rules for DSM and other services below these. Check that rule
+1 really covers your LAN before saving, or you could lock yourself out of DSM.
+If people travel abroad, add their countries to rule 2, or remove rule 3 while
+they're away. MFA still applies either way.
+
+**Check from outside:** on a phone on mobile data (wifi off), open
+`https://trybooking.synology.me:8443`. You should get the sign-in page with a
+padlock. Then try `https://trybooking.synology.me:5001` (DSM). That should
+**not** connect.
 
 ## 8. Settings and start
 
