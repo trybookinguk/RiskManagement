@@ -13,6 +13,7 @@ Two scores, as in docs/architecture.md:
                             High ticket price (average paid per ticket)
                             Immediate sales (value sold in the first 24h of sales)
                             No phone numbers (SharePoint bookings without a phone)
+                            Duplicate event (same name, same dates, same account)
                           x M1 account-age multiplier
                           x trust: bank transfers (payouts) received, past events
                             and their value. No transfers raises the score; over
@@ -22,6 +23,7 @@ Review priority (P1-P4) comes from the matrix in architecture.md section 6.4.
 Every number lives in CONFIG so it can be tuned; each run records
 CONFIG["version"] next to the scores (risk_daily.ModelVersion).
 """
+import re
 from datetime import date, datetime, timedelta
 
 CONFIG = {
@@ -54,6 +56,10 @@ CONFIG = {
         "immediate_sales": {"weight": 6, "window_hours": 24, "max_days_since_first_sale": 30,
                             "bands": [[1000, 1.0], [500, 0.6], [250, 0.3]]},     # £ sold in the first 24h of sales
         "no_phone": {"weight": 3, "threshold_pct": 50, "min_evidence": 5},  # % of bookings without a phone
+        # Same account, another upcoming event with the same name (ignoring case, spaces and punctuation)
+        # whose next session is within max_days of this one - e.g. "MIDNIGHT MADNESS" / "MIDNIGHT MADNESS.".
+        # A copied event for a different date (a weekly class, a pantomime run) doesn't count.
+        "duplicate_event": {"weight": 3, "max_days": 1},
         "points_for_100": 25,      # signal points that make a score of 100 (before multipliers)
         "age_multiplier": [[30, 1.5], [90, 1.3], [365, 1.15]],   # [[under N days, x], ...]
     },
@@ -224,6 +230,28 @@ def _upcoming_events(conn, today: str):
     return {r["EventId"]: dict(r) for r in rows}
 
 
+def _name_key(name) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def duplicate_events(events, meta, max_days):
+    """{EventId: [other EventIds]} for upcoming events of the same account with the same
+    name (ignoring case, spaces, punctuation) and next sessions within ``max_days``."""
+    groups = {}
+    for eid, e in events.items():
+        key = _name_key((meta.get(eid) or {}).get("EventName"))
+        if key:
+            groups.setdefault((e["AccountId"], key), []).append(eid)
+    out = {}
+    for ids in groups.values():
+        for a in ids:
+            near = [b for b in ids if b != a and (lambda d: d is not None and abs(d) <= max_days)(
+                _days(events[a]["NextSession"], events[b]["NextSession"]))]
+            if near:
+                out[a] = sorted(near)
+    return out
+
+
 def _load_ev(conn, event_ids):
     conn.execute("DROP TABLE IF EXISTS temp._ev")
     conn.execute("CREATE TEMP TABLE _ev (EventId INTEGER PRIMARY KEY)")
@@ -350,6 +378,7 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
     dec = _declines(conn, (today - timedelta(days=f["declines"]["days"])).isoformat())
     phone = _no_phone(conn)
     transfers, transfers_since, past = _trust_data(conn, t)
+    twins = duplicate_events(events, meta, f["duplicate_event"]["max_days"])
     trust_cache = {}
 
     def trust(aid):
@@ -427,6 +456,11 @@ def score(conn, today: date, cfg=CONFIG) -> dict:
         if s:
             pts += s
             reasons.append(f"{nophone_pct:.0f}% bookings without a phone {_pts(s)}")
+
+        dup = twins.get(eid)
+        if dup:
+            pts += f["duplicate_event"]["weight"]
+            reasons.append(f"duplicate of event {', '.join(str(x) for x in dup)} {_pts(f['duplicate_event']['weight'])}")
 
         tmult, twhy, n_transfers, past_n, past_gross = trust(e["AccountId"])
         if tmult > 1 and cfg["trust"].get("new_account_combine", "max") == "max":
