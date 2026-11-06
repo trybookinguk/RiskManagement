@@ -258,9 +258,15 @@ so it can never change the warehouse. It serves two things:
   hash of the query, row count, time).
 - **No customer personal data is ever shown.** The warehouse only holds
   hashes. Pages show the last 4 card digits and hash-based counts.
-- **Network:** NAS LAN only, through the DSM reverse proxy over HTTPS, with
-  the DSM firewall limited to the office or VPN subnet. **Never
-  port-forwarded to the internet.**
+- **Network** (changed 6 Nov 2026 for remote access):
+  - `https://trybooking.synology.me:8443` goes through the DSM reverse proxy.
+  - The router forwards **8443 only**, and the DSM firewall allows it from the
+    UK only.
+  - Microsoft SSO with MFA guards everything. Before sign-in, only the sign-in
+    page and `/api/health` `{"ok": true}` answer.
+  - Other host names are refused. Ports 8085, 5000/5001 and 22 are never
+    forwarded.
+  - Setup: `docs/entra_sso_setup.md`.
 
 ## 7. Deployment on the NAS
 

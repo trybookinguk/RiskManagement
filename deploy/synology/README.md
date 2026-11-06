@@ -179,11 +179,11 @@ How it's protected:
 1. the Entra app registration, roles and Conditional Access (Microsoft 365 admin)
 2. the Synology DDNS address `https://trybooking.synology.me:8443`
 3. a Let's Encrypt certificate for it in DSM
-4. the DSM reverse proxy from 8443 to 8085
+4. the DSM reverse proxy from 8443 to 8085, a router forward of 8443, and DSM firewall rules (8443 from the UK only)
 5. the `WEB_*` settings in `.env`
 6. `rmctl.sh web-start`
 
-Keep 8443 and 8085 LAN/VPN-only, and **never port-forward them**.
+The router forwards **8443 only**, and the DSM firewall allows 8443 only from the UK. Never forward 8085, 5000/5001 or 22.
 
 `update` restarts the dashboard automatically when it's running, so it always runs the latest code.
 

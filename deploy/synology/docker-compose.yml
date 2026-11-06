@@ -42,6 +42,6 @@ services:
       # even for readers. The app itself opens risk.db read-only (mode=ro).
       - /volume1/docker/riskmanagement-data:/data
     working_dir: /app
-    command: ["uvicorn", "--factory", "api.app:create_app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    command: ["uvicorn", "--factory", "api.app:create_app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
     ports:
       - "8085:8085"

@@ -127,9 +127,20 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
         return templates.TemplateResponse(request, name, {"user": getattr(request.state, "user", None), **ctx})
 
     # ---------------------------------------------------------- middleware --
+    # The dashboard is reachable from the internet (router forwards 8443 to the DSM
+    # reverse proxy), so: only answer for its own host name (plus localhost for the
+    # container health check), mark cookies Secure whenever the site is HTTPS, and
+    # say nothing about the warehouse before sign-in.
+    base = urllib.parse.urlsplit(settings.web_base_url) if settings.web_base_url else None
+    https_site = bool(base and base.scheme == "https")
+    allowed_hosts = {"localhost", "127.0.0.1"} | ({base.hostname.lower()} if base and base.hostname else set())
+
     @app.middleware("http")
     async def secure(request: Request, call_next):
         t0 = time.monotonic()
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if base and host not in allowed_hosts:
+            return JSONResponse({"error": "unknown host"}, status_code=400)
         response = await call_next(request)
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -138,6 +149,10 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
                                                        "data:; form-action 'self' https://login.microsoftonline.com; "
                                                        "frame-ancestors 'none'")
         response.headers["Cache-Control"] = "no-store"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        if https_site:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         u = getattr(request.state, "user", None)
         if request.url.path not in ("/api/health", "/favicon.ico", "/login", "/signed-out"):
             audit.write(u["who"] if u else None, request.method, request.url.path, request.url.query,
@@ -164,7 +179,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
 
     def _set_session(resp, request, data):
         resp.set_cookie(auth.SESSION_COOKIE, signer.dumps(data, auth.SESSION_SECONDS), max_age=auth.SESSION_SECONDS,
-                        httponly=True, samesite="lax", secure=request.url.scheme == "https")
+                        httponly=True, samesite="lax", secure=https_site or request.url.scheme == "https")
 
     # ------------------------------------------------------------- sign-in --
     MSG_COOKIE = "rm_msg"
@@ -172,7 +187,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
     def _to_login(request, message):
         resp = RedirectResponse("/login", status_code=303)
         resp.set_cookie(MSG_COOKIE, signer.dumps({"m": message}, 120), max_age=120, httponly=True, samesite="lax",
-                        secure=request.url.scheme == "https")
+                        secure=https_site or request.url.scheme == "https")
         resp.delete_cookie(auth.FLOW_COOKIE)
         return resp
 
@@ -192,7 +207,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
         flow["next"] = _safe_next(next)
         resp = RedirectResponse(flow["auth_uri"], status_code=303)
         resp.set_cookie(auth.FLOW_COOKIE, signer.dumps({"flow": flow}, 600), max_age=600, httponly=True,
-                        samesite="lax", secure=request.url.scheme == "https")
+                        samesite="lax", secure=https_site or request.url.scheme == "https")
         return resp
 
     @app.get("/auth/callback")
@@ -321,14 +336,14 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
 
     @app.get("/api/health")
     def api_health():
-        if not os.path.exists(settings.risk_db):
-            return JSONResponse({"ok": False, "error": "warehouse not created"}, status_code=503)
-        conn = connect()
-        try:
-            return {"ok": True, "sign_in": "microsoft" if entra is not None else "not configured",
-                    **queries.health(conn)}
-        finally:
-            conn.close()
+        """Public liveness check: says nothing about the warehouse (details: /api/status, signed in)."""
+        ok = os.path.exists(settings.risk_db)
+        return JSONResponse({"ok": ok}, status_code=200 if ok else 503)
+
+    @app.get("/api/status")
+    def api_status(request: Request):
+        return api(request, lambda c: {"ok": True, "sign_in": "microsoft" if entra is not None else "not configured",
+                                       **queries.health(c)})
 
     @app.get("/api/risk")
     def api_risk(request: Request, level: str = "account", priority: str = "", limit: int = 50, offset: int = 0):
