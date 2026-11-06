@@ -77,6 +77,10 @@ class Settings:
     web_entra_client_id: str = ""
     web_entra_client_secret: str = field(default="", repr=False)
     web_base_url: str = ""
+    web_allowed_domains: str = "trybooking.co.uk"
+    web_mfa_check: str = "amr_or_acrs"      # amr_or_acrs | amr | acrs | off
+    web_auth_context: str = "c1"            # Conditional Access authentication context requiring MFA
+    web_api_audience: str = ""              # extra accepted audience (default api://<client id>)
 
     _ENV = {
         "data_dir": "RISK_DATA_DIR",
@@ -100,6 +104,10 @@ class Settings:
         "web_entra_client_id": "WEB_ENTRA_CLIENT_ID",
         "web_entra_client_secret": "WEB_ENTRA_CLIENT_SECRET",
         "web_base_url": "WEB_BASE_URL",
+        "web_allowed_domains": "WEB_ALLOWED_DOMAINS",
+        "web_mfa_check": "WEB_MFA_CHECK",
+        "web_auth_context": "WEB_AUTH_CONTEXT",
+        "web_api_audience": "WEB_API_AUDIENCE",
     }
 
     @classmethod

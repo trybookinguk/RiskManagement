@@ -39,6 +39,9 @@ input[type=search], input[type=text], input[type=password] { width: 100%; paddin
 button { padding: 7px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-ink);
   font: inherit; cursor: pointer; }
 button.link { background: none; color: var(--muted); padding: 0; }
+a.button { display: inline-block; padding: 9px 16px; border-radius: 6px; background: var(--accent);
+  color: var(--accent-ink); font-weight: 600; }
+a.button:hover { text-decoration: none; opacity: .92; }
 .who { color: var(--muted); font-size: 13px; display: flex; gap: 10px; align-items: center; }
 main { max-width: 1280px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 4px 0 12px; }
@@ -98,7 +101,7 @@ svg.chart text { fill: var(--muted); font-size: 11px; }
              placeholder="Account or event id or name, booking ID, gateway id, VISA 1234, email, phone">
     </form>
     <div class="who">
-      <span>{{ user.who }}</span>
+      <span>{{ user.who }}{% if user.role == 'admin' %} · admin{% endif %}</span>
       <form action="/logout" method="post"><button class="link" type="submit">Sign out</button></form>
     </div>
     {% endif %}

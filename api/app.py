@@ -1,7 +1,7 @@
 """RiskManagement dashboard + JSON API (FastAPI).
 
 Run by the riskmanagement-web container:
-    uvicorn api.app:app --host 0.0.0.0 --port 8085 --proxy-headers
+    uvicorn --factory api.app:create_app --host 0.0.0.0 --port 8085 --proxy-headers
 
 Opens risk.db read-only for every request, so it can never change the
 warehouse. Pages are rendered on the server (Jinja2, no JavaScript); every page
@@ -15,6 +15,10 @@ Pages                       JSON
   /search?q=                  /api/search?q=
   /imports         (admin)    /api/imports
                               /api/health              (no sign-in)
+
+Sign-in is Microsoft only (api/auth.py): TryBooking tenant, @trybooking.co.uk,
+app role Risk.Viewer or Risk.Admin, MFA. Browsers get a session cookie; the
+JSON API takes an Entra access token for api://<client id>/Risk.Read.
 """
 import os
 import time
@@ -34,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 class NotSignedIn(Exception):
-    pass
+    """No (valid) session or bearer token. The message is safe to return."""
 
 
 class Forbidden(Exception):
@@ -55,12 +59,13 @@ def _date(v, n=10):
     return (str(v) or "")[:n] if v else "-"
 
 
-def create_app(settings=None, entra=None, today=None) -> FastAPI:
+def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAPI:
     settings = settings or config.get_settings()
     signer = auth.Signer()
     audit = auth.Audit(os.path.join(settings.data_dir, "logs"))
-    if entra is None and auth.entra_configured(settings):
-        entra = auth.Entra(settings)
+    if auth.entra_configured(settings):
+        entra = entra or auth.Entra(settings)
+        api_tokens = api_tokens or auth.ApiTokens(settings)
     state = {"hasher": None}
 
     app = FastAPI(title="RiskManagement", docs_url=None, redoc_url=None, openapi_url=None)
@@ -90,22 +95,22 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
 
     # ------------------------------------------------------------ identity --
     def user(request: Request, conn):
+        """Signed-in user from an Entra bearer token (API) or the session cookie (browser)."""
         cached = getattr(request.state, "user", None)
         if cached:
             return cached
         authz = request.headers.get("authorization", "")
         if authz.lower().startswith("bearer "):
-            name = auth.check_token(conn, authz[7:])
-            if name:
-                request.state.user = {"who": f"token:{name}", "role": "admin", "kind": "token"}
-                return request.state.user
+            if api_tokens is None:
+                raise NotSignedIn("Microsoft sign-in isn't set up on this server")
+            try:
+                u = api_tokens.check(authz[7:].strip())
+            except auth.AuthError as e:
+                raise NotSignedIn(str(e)) from None
+            request.state.user = dict(u, kind="api")
+            return request.state.user
         data = signer.loads(request.cookies.get(auth.SESSION_COOKIE, ""))
         if data:
-            if data.get("kind") == "entra":           # re-check: removed users lose access at once
-                role = auth.dashboard_role(conn, data["who"])
-                if not role:
-                    return None
-                data["role"] = role
             request.state.user = data
             return data
         return None
@@ -134,7 +139,7 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
                                                        "frame-ancestors 'none'")
         response.headers["Cache-Control"] = "no-store"
         u = getattr(request.state, "user", None)
-        if request.url.path not in ("/api/health", "/favicon.ico"):
+        if request.url.path not in ("/api/health", "/favicon.ico", "/login", "/signed-out"):
             audit.write(u["who"] if u else None, request.method, request.url.path, request.url.query,
                         response.status_code, int((time.monotonic() - t0) * 1000))
         return response
@@ -142,7 +147,9 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
     @app.exception_handler(NotSignedIn)
     async def not_signed_in(request: Request, exc):
         if request.url.path.startswith("/api/"):
-            return JSONResponse({"error": "sign in or send Authorization: Bearer <token>"}, status_code=401)
+            return JSONResponse({"error": str(exc) or "send Authorization: Bearer <Entra access token for "
+                                                       f"api://{settings.web_entra_client_id}/{auth.API_SCOPE}>"},
+                                status_code=401, headers={"WWW-Authenticate": auth.bearer_challenge(settings)})
         nxt = urllib.parse.quote(request.url.path + (f"?{request.url.query}" if request.url.query else ""))
         return RedirectResponse(f"/login?next={nxt}", status_code=303)
 
@@ -160,31 +167,27 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
                         httponly=True, samesite="lax", secure=request.url.scheme == "https")
 
     # ------------------------------------------------------------- sign-in --
-    @app.get("/login", response_class=HTMLResponse)
-    def login_form(request: Request, next: str = "/", error: str = ""):
-        return templates.TemplateResponse(request, "login.html", {"next": _safe_next(next), "error": error,
-                                                                  "user": None})
+    MSG_COOKIE = "rm_msg"
 
-    @app.post("/login")
-    async def login(request: Request):
-        form = urllib.parse.parse_qs((await request.body()).decode("utf-8", "replace"))
-        token = (form.get("token") or [""])[0]
-        nxt = _safe_next((form.get("next") or ["/"])[0])
-        conn = connect()
-        try:
-            name = auth.check_token(conn, token)
-        finally:
-            conn.close()
-        if not name:
-            return RedirectResponse(f"/login?next={urllib.parse.quote(nxt)}&error=token", status_code=303)
-        resp = RedirectResponse(nxt, status_code=303)
-        _set_session(resp, request, {"who": f"token:{name}", "role": "admin", "kind": "token"})
+    def _to_login(request, message):
+        resp = RedirectResponse("/login", status_code=303)
+        resp.set_cookie(MSG_COOKIE, signer.dumps({"m": message}, 120), max_age=120, httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https")
+        resp.delete_cookie(auth.FLOW_COOKIE)
+        return resp
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = "/"):
+        msg = (signer.loads(request.cookies.get(MSG_COOKIE, "")) or {}).get("m")
+        resp = templates.TemplateResponse(request, "login.html", {"next": _safe_next(next), "error": msg,
+                                                                  "user": None, "domains": settings.web_allowed_domains})
+        resp.delete_cookie(MSG_COOKIE)
         return resp
 
     @app.get("/auth/start")
     def auth_start(request: Request, next: str = "/"):
         if entra is None:
-            raise HTTPException(404, "Microsoft sign-in isn't set up")
+            raise HTTPException(503, "Microsoft sign-in isn't set up yet (WEB_ENTRA_* in .env).")
         flow = entra.start()
         flow["next"] = _safe_next(next)
         resp = RedirectResponse(flow["auth_uri"], status_code=303)
@@ -195,33 +198,33 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
     @app.get("/auth/callback")
     def auth_callback(request: Request):
         if entra is None:
-            raise HTTPException(404, "Microsoft sign-in isn't set up")
+            raise HTTPException(503, "Microsoft sign-in isn't set up yet (WEB_ENTRA_* in .env).")
         data = signer.loads(request.cookies.get(auth.FLOW_COOKIE, ""))
         if not data:
-            return RedirectResponse("/login?error=expired", status_code=303)
+            return _to_login(request, "The sign-in took too long or was started elsewhere. Try again.")
         flow = data["flow"]
         try:
-            email = entra.finish(flow, dict(request.query_params))
-        except ValueError:
-            return RedirectResponse("/login?error=microsoft", status_code=303)
-        conn = connect()
-        try:
-            role = auth.dashboard_role(conn, email)
-        finally:
-            conn.close()
-        if not role:
-            request.state.user = {"who": email, "role": None}
-            return RedirectResponse("/login?error=not_allowed", status_code=303)
+            u = auth.check_claims(entra.finish(flow, dict(request.query_params)), settings)
+        except auth.AuthError as e:
+            request.state.user = {"who": "(refused)"}
+            return _to_login(request, str(e))
+        request.state.user = u
         resp = RedirectResponse(_safe_next(flow.get("next")), status_code=303)
-        _set_session(resp, request, {"who": email, "role": role, "kind": "entra"})
+        _set_session(resp, request, {"who": u["who"], "role": u["role"], "mfa": u["mfa"], "kind": "entra"})
         resp.delete_cookie(auth.FLOW_COOKIE)
         return resp
 
     @app.post("/logout")
     def logout():
-        resp = RedirectResponse("/login", status_code=303)
+        resp = RedirectResponse("/signed-out", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE)
         return resp
+
+    @app.get("/signed-out", response_class=HTMLResponse)
+    def signed_out(request: Request):
+        return templates.TemplateResponse(request, "login.html", {"next": "/", "error": None, "user": None,
+                                                                  "signed_out": True,
+                                                                  "domains": settings.web_allowed_domains})
 
     # --------------------------------------------------------------- pages --
     def _risk(conn, level, priority, limit, offset):
@@ -322,7 +325,8 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
             return JSONResponse({"ok": False, "error": "warehouse not created"}, status_code=503)
         conn = connect()
         try:
-            return {"ok": True, **queries.health(conn)}
+            return {"ok": True, "sign_in": "microsoft" if entra is not None else "not configured",
+                    **queries.health(conn)}
         finally:
             conn.close()
 
@@ -352,6 +356,15 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
     def api_search(request: Request, q: str = ""):
         return api(request, lambda c: queries.search(c, q, hasher(c)))
 
+    @app.get("/api/me")
+    def api_me(request: Request):
+        """Who you're signed in as, your role, and how the token showed MFA (amr, acrs:c1, ...)."""
+        def me(conn):
+            u = require(request, conn)
+            return {"who": u["who"], "role": u["role"], "mfa": u.get("mfa"),
+                    "via": "access token" if u.get("kind") == "api" else "browser session"}
+        return api(request, me)
+
     @app.get("/api/imports")
     def api_imports(request: Request):
         return api(request, queries.imports, "admin")
@@ -366,5 +379,3 @@ def create_app(settings=None, entra=None, today=None) -> FastAPI:
 
     return app
 
-
-app = create_app()

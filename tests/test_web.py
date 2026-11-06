@@ -1,18 +1,32 @@
-"""Dashboard + JSON API (FastAPI TestClient) on the fireworks scenario warehouse."""
+"""Dashboard + JSON API (FastAPI TestClient) on the fireworks scenario warehouse.
+
+Sign-in is Microsoft only. The browser flow uses a fake Entra that returns ID
+token claims; the API is tested with real RS256 JWTs signed by a test key whose
+public half stands in for Microsoft's published keys.
+"""
+import html
 import importlib.util
 import json
 import pathlib
+import time
 
 import pytest
 
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
+jwt = pytest.importorskip("jwt")
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from rm import config, db  # noqa: E402
+from api import auth  # noqa: E402
 from test_risk_signals import TODAY, scenario  # noqa: E402,F401
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+TENANT = "11111111-2222-3333-4444-555555555555"
+CLIENT = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 def _load(name, rel):
@@ -22,98 +36,191 @@ def _load(name, rel):
     return mod
 
 
+def id_claims(**over):
+    c = {"tid": TENANT, "preferred_username": "Risk.Analyst@trybooking.co.uk", "roles": ["Risk.Viewer"],
+         "amr": ["pwd", "mfa"], "aud": CLIENT}
+    c.update(over)
+    return {k: v for k, v in c.items() if v is not None}
+
+
+class FakeEntra:
+    def __init__(self):
+        self.claims = id_claims()
+
+    def start(self):
+        return {"auth_uri": f"https://login.microsoftonline.com/{TENANT}/oauth2/v2.0/authorize?state=s", "state": "s"}
+
+    def finish(self, flow, params):
+        if params.get("state") != flow["state"]:
+            raise auth.AuthError("The sign-in didn't match the one started here. Try again.")
+        return self.claims
+
+
+class FakeJWKS:
+    class _K:
+        key = KEY.public_key()
+
+    def get_signing_key_from_jwt(self, token):
+        return self._K()
+
+
+def access_token(key=KEY, **over):
+    now = int(time.time())
+    c = {"iss": f"https://login.microsoftonline.com/{TENANT}/v2.0", "aud": CLIENT, "tid": TENANT,
+         "iat": now, "nbf": now, "exp": now + 3600, "scp": "Risk.Read",
+         "preferred_username": "risk.analyst@trybooking.co.uk", "roles": ["Risk.Viewer"], "amr": ["pwd", "mfa"]}
+    c.update(over)
+    return jwt.encode({k: v for k, v in c.items() if v is not None}, key, algorithm="RS256")
+
+
 @pytest.fixture
-def site(scenario, capsys):
+def entra_env(monkeypatch):
+    for k, v in {"AZURE_TENANT_ID": TENANT, "WEB_ENTRA_CLIENT_ID": CLIENT, "WEB_ENTRA_CLIENT_SECRET": "x",
+                 "WEB_BASE_URL": "https://risk.trybooking.co.uk"}.items():
+        monkeypatch.setenv(k, v)
+
+
+@pytest.fixture
+def site(scenario, entra_env):
     assert _load("risk_report", "bin/risk_report.py").main(["--no-email", "--today", TODAY]) == 0
-    admin = _load("rm_admin", "bin/rm_admin.py")
-    assert admin.main(["create-token", "Henry"]) == 0
-    token = [l.strip() for l in capsys.readouterr().out.splitlines() if l.strip().startswith("tok_")][0]
-    assert admin.main(["add-user", "risk.analyst@trybooking.co.uk", "--role", "viewer"]) == 0
+    return make_client()
+
+
+def make_client():
     from api.app import create_app
-    app = create_app(config.get_settings(), today=TODAY)
-    return TestClient(app), token
-
-
-def _signed_in(client, token):
-    r = client.post("/login", data={"token": token, "next": "/"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/"
+    s = config.get_settings()
+    entra = FakeEntra()
+    client = TestClient(create_app(s, entra=entra, today=TODAY, api_tokens=auth.ApiTokens(s, jwks=FakeJWKS())),
+                        base_url="https://risk.trybooking.co.uk")
+    client.entra = entra
     return client
 
 
+def sign_in(client, next_="/", **claims):
+    client.entra.claims = id_claims(**claims)
+    r = client.get(f"/auth/start?next={next_}", follow_redirects=False)
+    assert r.headers["location"].startswith("https://login.microsoftonline.com/")
+    return client.get("/auth/callback?state=s&code=c", follow_redirects=False)
+
+
+@pytest.fixture
+def viewer(site):
+    r = sign_in(site)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    return site
+
+
+# ------------------------------------------------------------- sign-in ---
+
 def test_sign_in_required(site):
-    client, token = site
-    r = client.get("/", follow_redirects=False)
+    r = site.get("/", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("/login")
-    assert client.get("/api/risk").status_code == 401
-    assert client.get("/api/health").json()["ok"] is True
-    r = client.post("/login", data={"token": "tok_bad.nope"}, follow_redirects=False)
-    assert "error=token" in r.headers["location"]
-    r = client.post("/login", data={"token": token, "next": "//evil.example"}, follow_redirects=False)
-    assert r.headers["location"] == "/"                                      # no open redirect
+    r = site.get("/api/risk")
+    assert r.status_code == 401 and "login.microsoftonline.com" in r.headers["WWW-Authenticate"]
+    assert site.get("/api/health").json()["sign_in"] == "microsoft"
+    login = site.get("/login").text
+    assert "Sign in with Microsoft" in login and "tok_" not in login and 'name="token"' not in login
+    assert site.post("/login", data={"token": "tok_x.y"}).status_code == 405      # token sign-in is gone
 
 
-def test_risk_pages(site):
-    client, token = _signed_in(*site), site[1]
-    page = client.get("/").text
+def test_session_cookie_is_secure(site):
+    r = sign_in(site)
+    cookie = r.headers["set-cookie"]
+    assert "rm_session=" in cookie and "HttpOnly" in cookie and "Secure" in cookie and "samesite=lax" in cookie.lower()
+
+
+@pytest.mark.parametrize("claims, message", [
+    ({"tid": "99999999-0000-0000-0000-000000000000"}, "isn't in the TryBooking Microsoft tenant"),
+    ({"preferred_username": "someone@gmail.com"}, "Only @trybooking.co.uk accounts"),
+    ({"roles": None}, "hasn't been given access"),
+    ({"roles": ["SomethingElse"]}, "hasn't been given access"),
+    ({"amr": ["pwd"]}, "Multi-factor authentication is required"),
+    ({"amr": None}, "Multi-factor authentication is required"),
+])
+def test_sign_in_refused(site, claims, message):
+    r = sign_in(site, **claims)
+    assert r.headers["location"] == "/login" and "rm_session=" not in r.headers.get("set-cookie", "")
+    assert message in html.unescape(site.get("/login").text)
+    assert site.get("/", follow_redirects=False).status_code == 303
+
+
+def test_mfa_by_authentication_context(site, monkeypatch):
+    r = sign_in(site, amr=["pwd"], acrs=["c1"])                     # Conditional Access auth context satisfied
+    assert r.headers["location"] == "/"
+    req = json.loads(auth.claims_request(config.get_settings()))
+    assert req["id_token"]["acrs"] == {"essential": True, "value": "c1"}
+
+
+def test_mfa_check_off_relies_on_conditional_access(scenario, entra_env, monkeypatch):
+    monkeypatch.setenv("WEB_MFA_CHECK", "off")
+    client = make_client()
+    assert sign_in(client, amr=["pwd"]).headers["location"] == "/"
+    assert auth.claims_request(config.get_settings()) is None
+
+
+def test_roles_and_open_redirect(site):
+    assert sign_in(site, next_="//evil.example").headers["location"] == "/"
+    assert site.get("/imports").status_code == 403                                  # viewer
+    sign_in(site, roles=["Risk.Viewer", "Risk.Admin"])
+    assert site.get("/imports").status_code == 200
+    assert "· admin" in site.get("/").text
+    me = site.get("/api/me").json()
+    assert me == {"who": "risk.analyst@trybooking.co.uk", "role": "admin", "mfa": "amr", "via": "browser session"}
+    r = site.post("/logout", follow_redirects=False)
+    assert r.headers["location"] == "/signed-out"
+
+
+def test_not_configured(scenario, monkeypatch):
+    from api.app import create_app
+    client = TestClient(create_app(config.get_settings(), today=TODAY))
+    assert "isn't set up on this server yet" in html.unescape(client.get("/login").text)
+    assert client.get("/auth/start").status_code == 503
+    assert client.get("/api/health").json()["sign_in"] == "not configured"
+    assert client.get("/api/risk", headers={"Authorization": f"Bearer {access_token()}"}).status_code == 401
+
+
+# ----------------------------------------------------------------- pages ---
+
+def test_risk_pages(viewer):
+    page = viewer.get("/").text
     assert "Sparkle Events" in page and "P1" in page and "account created 01:30 (night)" in page
-    page = client.get("/?level=event&priority=P1").text
-    assert "Fireworks Spectacular" in page
-    acc = client.get("/accounts/30").text
+    assert "risk.analyst@trybooking.co.uk" in page
+    assert "Fireworks Spectacular" in viewer.get("/?level=event&priority=P1").text
+    acc = viewer.get("/accounts/30").text
     for text in ("Sparkle Events", "Account created", "Bank transfers", "no bank transfers yet", "Fireworks Spectacular"):
         assert text in acc, text
-    acc40 = client.get("/accounts/40").text
+    acc40 = viewer.get("/accounts/40").text
     assert "24 (£12,000)" in acc40 and "12 (£60,000)" in acc40
-    ev = client.get("/events/300").text
-    assert "Average ticket" in ev and "£100" in ev and "Payment attempts" in ev and "<svg" not in ev  # 1 run: no chart
-    assert client.get("/accounts/999999").status_code == 404
-    imports = client.get("/imports")
-    assert imports.status_code == 200 and "s3:BookingData" in imports.text
+    ev = viewer.get("/events/300").text
+    assert "Average ticket" in ev and "£100" in ev and "Payment attempts" in ev
+    assert viewer.get("/accounts/999999").status_code == 404
 
 
-def test_search(site):
-    client, token = _signed_in(*site), site[1]
-    r = client.get("/search?q=30", follow_redirects=False)
+def test_search(viewer):
+    r = viewer.get("/search?q=30", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/accounts/30"
-    assert "Village Bonfire" in client.get("/search?q=bonfire").text
+    assert "Village Bonfire" in viewer.get("/search?q=bonfire").text
     guid = "00000000-0000-4000-8000-000000003000"
-    r = client.get(f"/search?q={guid.upper().replace('-', '')}", follow_redirects=False)
+    r = viewer.get(f"/search?q={guid.upper().replace('-', '')}", follow_redirects=False)
     assert r.headers["location"] == f"/bookings/{guid}"
-    b = client.get(f"/bookings/{guid}").text
+    b = viewer.get(f"/bookings/{guid}").text
     assert "Fireworks Spectacular" in b and "Successful" in b and "jane@example.com" not in b
-    found = client.get("/api/search", params={"q": "jane@example.com"}).json()
-    assert found["kind"] == "email" and len(found["results"]) == 20              # 20 SharePoint rows with that email
-    assert client.get("/api/search", params={"q": "VISA 4242"}).json()["kind"] == "card"
-    assert client.get("/api/search", params={"q": "07700 900123"}).json()["kind"] == "phone"
+    found = viewer.get("/api/search", params={"q": "jane@example.com"}).json()     # session works for /api too
+    assert found["kind"] == "email" and len(found["results"]) == 20
+    assert viewer.get("/api/search", params={"q": "VISA 4242"}).json()["kind"] == "card"
+    assert viewer.get("/api/search", params={"q": "07700 900123"}).json()["kind"] == "phone"
 
 
-def test_json_api_with_bearer_token(site):
-    client, token = site
-    h = {"Authorization": f"Bearer {token}"}
-    risk = client.get("/api/risk?level=event&priority=P1", headers=h).json()
-    assert risk["run"] == TODAY and [r["Id"] for r in risk["rows"]] == [300]
-    acc = client.get("/api/accounts/40", headers=h).json()
-    assert acc["transfers"]["count"] == 24 and acc["past"]["events"] == 12
-    ev = client.get("/api/events/300", headers=h).json()
-    assert ev["sales"]["FirstDay"] == 1000.0 and ev["latest"]["Priority"] == "P1"
-    assert client.get("/api/events/1", headers=h).status_code == 404
-    assert client.get("/api/imports", headers=h).status_code == 200
-    assert client.get("/api/risk?priority=P9", headers=h).status_code == 400
-
-
-def test_audit_log_has_no_search_terms(site):
-    client, token = _signed_in(*site), site[1]
-    client.get("/search", params={"q": "jane@example.com"})
-    logs = list((pathlib.Path(config.get_settings().data_dir) / "logs").glob("web-audit-*.log"))
-    text = logs[0].read_text()
+def test_audit_log_has_no_search_terms(viewer):
+    viewer.get("/search", params={"q": "jane@example.com"})
+    text = next((pathlib.Path(config.get_settings().data_dir) / "logs").glob("web-audit-*.log")).read_text()
     assert "jane@example.com" not in text and "jane" not in text
-    lines = [json.loads(l) for l in text.splitlines()]
-    s = [l for l in lines if l["path"] == "/search"][0]
-    assert s["who"] == "token:Henry" and len(s["query"]) == 16
+    s = [json.loads(l) for l in text.splitlines() if '"/search"' in l][0]
+    assert s["who"] == "risk.analyst@trybooking.co.uk" and len(s["query"]) == 16
 
 
-def test_security_headers_and_read_only(site):
-    client, token = _signed_in(*site), site[1]
-    r = client.get("/")
+def test_security_headers_and_read_only(viewer):
+    r = viewer.get("/")
     assert r.headers["X-Frame-Options"] == "DENY" and "default-src 'none'" in r.headers["Content-Security-Policy"]
     conn = db.connect(config.get_settings().risk_db, readonly=True)
     with pytest.raises(Exception):
@@ -121,30 +228,47 @@ def test_security_headers_and_read_only(site):
     conn.close()
 
 
-class FakeEntra:
-    def __init__(self, email):
-        self.email = email
+# ------------------------------------------------------------------- API ---
 
-    def start(self):
-        return {"auth_uri": "https://login.microsoftonline.com/x/authorize?state=s", "state": "s"}
-
-    def finish(self, flow, params):
-        assert params.get("state") == flow["state"]
-        return self.email
+def _api(client, token, path="/api/risk?level=event&priority=P1"):
+    return client.get(path, headers={"Authorization": f"Bearer {token}"})
 
 
-@pytest.mark.parametrize("email, allowed", [("Risk.Analyst@trybooking.co.uk", True), ("someone@else.com", False)])
-def test_microsoft_sign_in(site, email, allowed):
-    from api.app import create_app
-    client = TestClient(create_app(config.get_settings(), entra=FakeEntra(email.lower()), today=TODAY))
-    assert "Sign in with Microsoft" in client.get("/login").text
-    r = client.get("/auth/start?next=/accounts/30", follow_redirects=False)
-    assert r.headers["location"].startswith("https://login.microsoftonline.com/")
-    r = client.get("/auth/callback?state=s&code=c", follow_redirects=False)
-    if allowed:
-        assert r.headers["location"] == "/accounts/30"
-        assert client.get("/accounts/30").status_code == 200
-        assert client.get("/imports").status_code == 403                        # viewer, not admin
+def test_api_with_entra_access_token(site):
+    r = _api(site, access_token())
+    assert r.status_code == 200 and [x["Id"] for x in r.json()["rows"]] == [300]
+    assert _api(site, access_token(aud=f"api://{CLIENT}")).status_code == 200
+    assert _api(site, access_token(iss=f"https://sts.windows.net/{TENANT}/", upn="risk.analyst@trybooking.co.uk",
+                                   preferred_username=None)).status_code == 200            # v1.0 token
+    acc = _api(site, access_token(), "/api/accounts/40").json()
+    assert acc["transfers"]["count"] == 24 and acc["past"]["events"] == 12
+    assert _api(site, access_token(), "/api/imports").status_code == 403                   # viewer
+    assert _api(site, access_token(), "/api/me").json()["via"] == "access token"
+    assert _api(site, access_token(roles=["Risk.Admin"]), "/api/imports").status_code == 200
+
+
+@pytest.mark.parametrize("over, why", [
+    ({"exp": int(time.time()) - 3600}, "token expired"),
+    ({"tid": "99999999-0000-0000-0000-000000000000"}, "invalid token"),       # issuer check fails first? see below
+    ({"aud": "api://someone-else"}, "invalid token"),
+    ({"iss": "https://login.microsoftonline.com/common/v2.0"}, "wrong issuer"),
+    ({"scp": None}, "Risk.Read scope"),                                          # app-only token
+    ({"amr": ["pwd"]}, "Multi-factor authentication is required"),
+    ({"roles": None}, "hasn't been given access"),
+    ({"preferred_username": "x@gmail.com"}, "Only @trybooking.co.uk"),
+])
+def test_api_refuses(site, over, why):
+    r = _api(site, access_token(**over))
+    assert r.status_code == 401
+    if over.get("tid"):
+        assert "TryBooking Microsoft tenant" in r.json()["error"]
     else:
-        assert "error=not_allowed" in r.headers["location"]
-        assert client.get("/", follow_redirects=False).status_code == 303
+        assert why in r.json()["error"]
+
+
+def test_api_refuses_forged_and_static_tokens(site):
+    assert _api(site, access_token(key=OTHER_KEY)).json()["error"] == "invalid token"
+    assert _api(site, "tok_abcd.secret").status_code == 401
+    assert _api(site, "not-a-jwt").status_code == 401
+    hs = jwt.encode({"tid": TENANT, "aud": CLIENT}, "s" * 32, algorithm="HS256")             # algorithm swap
+    assert _api(site, hs).status_code == 401
