@@ -191,7 +191,7 @@ case "$CMD" in
     for i in 1 2 3 4 5 6 7 8 9 10; do
       sleep 2
       if docker exec "$WEB" python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=3).status == 200 else 1)" 2>/dev/null; then
-        say "Dashboard is up. Browse to WEB_BASE_URL (e.g. https://risk.trybooking.co.uk) and sign in with Microsoft."
+        say "Dashboard is up. Browse to WEB_BASE_URL (https://trybooking.synology.me:8443) and sign in with Microsoft."
         break
       fi
       [ $i -eq 10 ] && { docker logs --tail 40 "$WEB"; die "dashboard did not answer /api/health"; }

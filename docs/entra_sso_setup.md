@@ -1,6 +1,6 @@
 # Dashboard and API sign-in: Microsoft SSO with MFA
 
-The dashboard (`https://risk.trybooking.co.uk`) and its JSON API (`/api/...`)
+The dashboard (`https://trybooking.synology.me:8443`) and its JSON API (`/api/...`)
 accept only:
 
 - people in the **TryBooking Microsoft tenant** with an **@trybooking.co.uk**
@@ -26,7 +26,7 @@ Applications → App registrations → New registration**.
 | --- | --- |
 | Name | `RiskManagement Dashboard` |
 | Supported account types | **Accounts in this organizational directory only** (single tenant) |
-| Redirect URI | Platform **Web**, `https://risk.trybooking.co.uk/auth/callback` |
+| Redirect URI | Platform **Web**, `https://trybooking.synology.me:8443/auth/callback` |
 
 After **Register**, copy the **Application (client) ID** and the
 **Directory (tenant) ID** from the Overview page.
@@ -106,57 +106,51 @@ Hand these over through the password manager, not by email:
 
 ---
 
-## 5. DNS
+## 5. Address: Synology DDNS (no trybooking.co.uk DNS change)
 
-You need the name `risk.trybooking.co.uk` to point to the NAS, in two places:
+The dashboard's address is **`https://trybooking.synology.me:8443`**. It uses
+the NAS's free Synology DDNS name, so no company DNS record is needed.
 
-- **Inside the office/VPN:** the NAS's **LAN IP**. Add it on the internal DNS
-  server, or on the router's DNS if there's no internal server.
-- **Public DNS** (only so Let's Encrypt can check the name): the office's
-  **public IP**.
+1. In **DSM → Control Panel → External Access → DDNS**, check that the entry
+   `trybooking.synology.me` shows **Normal**. If it doesn't, edit it and tick
+   **Heartbeat**.
+2. **From inside the office:** the name resolves to the office's public IP.
+   Browsers on the LAN reach the NAS only if the router supports **NAT
+   loopback** (hairpin), and most do. Test it in step 9. If the page doesn't
+   load from the LAN, add a local DNS entry on the router (or the VPN's DNS)
+   pointing `trybooking.synology.me` at the NAS's LAN IP.
 
-If there's no internal DNS, browsers resolve the public IP. That works only if
-the router supports NAT loopback (hairpin); most do.
+## 6. Certificate (Let's Encrypt via DSM)
 
-## 6. Let's Encrypt certificate (DSM)
+1. Go to **DSM → Control Panel → Security → Certificate**. If there's no
+   certificate for `trybooking.synology.me` (the DDNS wizard usually makes one),
+   choose **Add → Add a new certificate → Get a certificate from Let's
+   Encrypt**, with domain `trybooking.synology.me` and email
+   `henry@trybooking.co.uk`.
+2. DSM renews it automatically. For synology.me names, recent DSM versions do
+   this without any port being opened. **If DSM reports a Let's Encrypt
+   error**, forward TCP **port 80 only** to the NAS on the router, both for the
+   first certificate and for renewals. Never forward 8443 or 8085.
 
-DSM gets Let's Encrypt certificates with the **HTTP check**. Let's Encrypt
-connects to `http://risk.trybooking.co.uk` on **port 80 from the internet**,
-both when issuing the certificate and on every renewal (about every 60 days).
-So:
-
-1. On the router, **forward TCP port 80 only** to the NAS.
-   - **Don't** forward 443 or 8085. The dashboard stays LAN/VPN-only.
-   - On port 80, DSM answers the Let's Encrypt check. Everything else gets a
-     redirect to HTTPS, which isn't reachable from outside.
-2. Go to **DSM → Control Panel → Security → Certificate → Add → Add a new
-   certificate → Get a certificate from Let's Encrypt**.
-   - Domain name `risk.trybooking.co.uk`, email `henry@trybooking.co.uk`.
-   - DSM renews it automatically.
-3. Under **Certificate → Settings**, assign this certificate to the reverse
-   proxy entry from step 7.
-
-**If port 80 can't be opened:** Let's Encrypt's DNS check (DNS-01) needs no
-inbound port at all. DSM's built-in Let's Encrypt doesn't offer it for your own
-domain. It needs a small `acme.sh` task that talks to your DNS host's API (for
-example Cloudflare). Ask, and it can be added as an `rmctl` task.
-
-## 7. Reverse proxy (HTTPS → dashboard)
+## 7. Reverse proxy (HTTPS 8443 → dashboard)
 
 Go to **DSM → Control Panel → Login Portal → Advanced → Reverse Proxy →
 Create**:
 
 | | Protocol | Hostname | Port |
 | --- | --- | --- | --- |
-| Source | HTTPS | `risk.trybooking.co.uk` | 443 |
+| Source | HTTPS | `trybooking.synology.me` | **8443** |
 | Destination | HTTP | `localhost` | 8085 |
 
-- Tick **Enable HSTS**.
-- In **Custom Header → Create → WebSocket**, nothing more is needed. The
-  dashboard doesn't use WebSockets, but the default headers are fine.
+Tick **Enable HSTS**. Port 8443 keeps it clear of DSM's own 443/5001.
 
-**DSM firewall:** allow 443 and 8085 only from the office/VPN subnets. Port 80
-must stay open to everyone for Let's Encrypt.
+Then:
+
+1. In **Security → Certificate → Settings**, set the reverse proxy entry
+   `trybooking.synology.me:8443` to use the `trybooking.synology.me`
+   certificate.
+2. In **Security → Firewall**, allow 8443 (and 8085) **only from the office
+   and VPN subnets**. Don't port-forward 8443 or 8085 on the router.
 
 ## 8. Settings and start
 
@@ -168,7 +162,7 @@ must stay open to everyone for Let's Encrypt.
    AZURE_TENANT_ID=<directory (tenant) id>        # usually already set (same tenant)
    WEB_ENTRA_CLIENT_ID=<application (client) id>
    WEB_ENTRA_CLIENT_SECRET=<client secret value>
-   WEB_BASE_URL=https://risk.trybooking.co.uk
+   WEB_BASE_URL=https://trybooking.synology.me:8443
    ```
 
 3. Run the task `rmctl.sh env-apply`.
@@ -176,9 +170,9 @@ must stay open to everyone for Let's Encrypt.
 
 ## 9. Test
 
-1. Browse to `https://risk.trybooking.co.uk` and click **Sign in with
+1. Browse to `https://trybooking.synology.me:8443` and click **Sign in with
    Microsoft**. You should be asked for MFA, then land on the risk list.
-2. Open `https://risk.trybooking.co.uk/api/me`. It shows your role and how MFA
+2. Open `https://trybooking.synology.me:8443/api/me`. It shows your role and how MFA
    was proven, e.g. `"mfa": "acrs:c1"` or `"mfa": "amr"`.
 3. Check what a non-MFA sign-in does. Use an account without the role, or a
    private window with Conditional Access in Report-only. It should be refused
@@ -214,7 +208,7 @@ Every page has a JSON twin under `/api/...`.
   ```
 
   ```bash
-  curl -H "Authorization: Bearer $TOKEN" https://risk.trybooking.co.uk/api/risk?priority=P1
+  curl -H "Authorization: Bearer $TOKEN" https://trybooking.synology.me:8443/api/risk?priority=P1
   ```
 
   Conditional Access applies, so `az login` asks for MFA.
