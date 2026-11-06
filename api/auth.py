@@ -127,6 +127,26 @@ def claims_request(settings):
     return json.dumps({"id_token": want, "access_token": want})
 
 
+_GUID = __import__("re").compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def config_problems(settings) -> list:
+    """Setting mistakes that would make Microsoft refuse every sign-in (e.g. a client ID
+    missing a character when copied). Safe to show: names settings, never secret values."""
+    if not entra_configured(settings):
+        return []
+    out = []
+    for env, value in (("WEB_ENTRA_CLIENT_ID", settings.web_entra_client_id),
+                       ("AZURE_TENANT_ID", settings.azure_tenant_id)):
+        if not _GUID.match(value.strip()):
+            parts = "-".join(str(len(p)) for p in value.strip().split("-"))
+            out.append(f"{env} isn't a complete ID: it has {parts} characters between the dashes, "
+                       "expected 8-4-4-4-12. Copy it again from the app registration's Overview page.")
+    if not settings.web_base_url.startswith("https://"):
+        out.append("WEB_BASE_URL must start with https:// (Microsoft only redirects to HTTPS addresses).")
+    return out
+
+
 def entra_configured(settings) -> bool:
     return all([settings.web_entra_client_id, settings.web_entra_client_secret, settings.web_base_url,
                 settings.azure_tenant_id])

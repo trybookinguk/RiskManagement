@@ -10,6 +10,10 @@
     Multi-factor authentication is required, and you need the RiskManagement app role
     (ask the Microsoft 365 admin).</p>
   {% if signed_out %}<p class="muted">To end your Microsoft session too, sign out of Microsoft 365.</p>{% endif %}
+  {% elif config_problems %}
+  <p class="err">Microsoft sign-in is switched off because of a setting problem in <code>.env</code>:</p>
+  <ul class="err">{% for p in config_problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  <p class="muted">Fix it with <code>rmctl.sh env-export</code> / <code>env-apply</code>; the dashboard restarts by itself.</p>
   {% else %}
   <p class="err">Microsoft sign-in isn't set up on this server yet.</p>
   <p class="muted">An admin sets <code>WEB_ENTRA_CLIENT_ID</code>, <code>WEB_ENTRA_CLIENT_SECRET</code> and
