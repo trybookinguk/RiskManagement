@@ -45,3 +45,19 @@ services:
     command: ["uvicorn", "--factory", "api.app:create_app", "--host", "0.0.0.0", "--port", "8085", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
     ports:
       - "8085:8085"
+
+  # TEMPORARY remote access through ngrok (docs/ngrok_temporary.md) until the
+  # router forwards 8443. Start/stop from Task Scheduler:
+  #   rmctl.sh tunnel-start | tunnel-stop | tunnel-status
+  # Only NGROK_AUTHTOKEN and NGROK_DOMAIN reach this container (rmctl passes
+  # them in); it never sees the rest of .env. The inspection UI is off so ngrok
+  # keeps no copy of requests on the NAS.
+  riskmanagement-tunnel:
+    image: ngrok/ngrok:latest
+    container_name: riskmanagement-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    environment:
+      - NGROK_AUTHTOKEN
+    command: ["http", "--domain=${NGROK_DOMAIN:-not-set}", "--inspect=false", "--log=stdout",
+              "--log-format=logfmt", "riskmanagement-web:8085"]

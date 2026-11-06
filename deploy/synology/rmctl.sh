@@ -24,6 +24,9 @@
 #   web-start             start (or restart) the dashboard on port 8085 (WEB_PORT)
 #   web-stop              stop the dashboard
 #   web-status            is the dashboard running, and does /api/health answer
+#   tunnel-start          TEMPORARY: publish the dashboard through ngrok (NGROK_* in .env)
+#   tunnel-stop           stop the ngrok tunnel
+#   tunnel-status         is the tunnel up, and its address
 #   restart               restart the containers
 #   env-export            copy .env to riskmanagement-data/setup/env-edit.txt so you
 #                         can change a setting with Text Editor (.env itself is root-only)
@@ -55,7 +58,7 @@ if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
 fi
 
 case "$CMD" in
-  setup|update|status|test|ingest-s3|ingest-sharepoint|report|check-transactions|full-refresh|restart|run|env-export|env-apply|web-start|web-stop|web-status) ;;
+  setup|update|status|test|ingest-s3|ingest-sharepoint|report|check-transactions|full-refresh|restart|run|env-export|env-apply|web-start|web-stop|web-status|tunnel-start|tunnel-stop|tunnel-status) ;;
   *) usage; echo; echo "ERROR: unknown command: $CMD"; exit 1 ;;
 esac
 
@@ -122,6 +125,13 @@ ensure_up() {
 }
 
 in_container() { docker exec "$CONTAINER" "$@"; }
+
+TUNNEL="riskmanagement-tunnel"
+
+# A value from .env without printing it (quotes and Windows line endings removed).
+env_value() {
+  grep -E "^$1=" "$REPO_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | sed -e 's/\r$//' -e 's/^["'\'']//' -e 's/["'\'']$//'
+}
 
 web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$WEB" 2>/dev/null)" = "true" ]; }
 
@@ -197,6 +207,40 @@ case "$CMD" in
       [ $i -eq 10 ] && { docker logs --tail 40 "$WEB"; die "dashboard did not answer /api/health"; }
     done
     rc=0 ;;
+  tunnel-start)
+    check_env
+    NGROK_AUTHTOKEN=$(env_value NGROK_AUTHTOKEN)
+    NGROK_DOMAIN=$(env_value NGROK_DOMAIN)
+    NGROK_DOMAIN=${NGROK_DOMAIN#https://}; NGROK_DOMAIN=${NGROK_DOMAIN%/}
+    [ -n "$NGROK_AUTHTOKEN" ] || die "NGROK_AUTHTOKEN is empty in .env (docs/ngrok_temporary.md step 1)"
+    [ -n "$NGROK_DOMAIN" ] || die "NGROK_DOMAIN is empty in .env, e.g. something.ngrok-free.app (docs/ngrok_temporary.md step 1)"
+    if [ "$(env_value WEB_BASE_URL)" != "https://$NGROK_DOMAIN" ]; then
+      say "WARNING: WEB_BASE_URL is '$(env_value WEB_BASE_URL)'. For sign-in through the tunnel it must be https://$NGROK_DOMAIN"
+      say "         (env-export, change it, env-apply), and that address + /auth/callback must be a redirect URI in Entra."
+    fi
+    web_running || die "the dashboard isn't running - run 'rmctl.sh web-start' first"
+    step "Starting the ngrok tunnel to the dashboard"
+    export NGROK_AUTHTOKEN NGROK_DOMAIN
+    compose --profile tunnel up -d --force-recreate "$TUNNEL" || die "could not start the tunnel"
+    sleep 8
+    if docker logs --tail 50 "$TUNNEL" 2>&1 | grep -q "started tunnel"; then
+      say "Tunnel is up: https://$NGROK_DOMAIN  (temporary - stop it with 'rmctl.sh tunnel-stop')"
+      rc=0
+    else
+      docker logs --tail 30 "$TUNNEL" 2>&1 | grep -v -i "authtoken" | tail -20
+      die "the tunnel didn't start - see the lines above (wrong token or domain?)"
+    fi ;;
+  tunnel-stop)
+    compose --profile tunnel rm -s -f "$TUNNEL"; rc=$?
+    [ $rc -eq 0 ] && say "Tunnel stopped: the dashboard is no longer reachable through ngrok" ;;
+  tunnel-status)
+    if [ "$(docker inspect -f '{{.State.Running}}' "$TUNNEL" 2>/dev/null)" = "true" ]; then
+      say "Tunnel is running: https://$(env_value NGROK_DOMAIN | sed -e 's#^https://##' -e 's#/$##')"
+      docker logs --tail 10 "$TUNNEL" 2>&1 | grep -v -i "authtoken"
+      rc=0
+    else
+      say "Tunnel is not running"; rc=1
+    fi ;;
   web-stop)
     compose --profile web stop "$WEB"; rc=$? ;;
   web-status)

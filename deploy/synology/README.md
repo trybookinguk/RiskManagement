@@ -131,6 +131,7 @@ added in build steps 4 and 6.
 | `check-transactions` | Booking Transactions import check only: files, match rate to S3 bookings, how each Gateway Message Description is classified, and the Status, CVV and card type values |
 | `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
 | `full-refresh` | One-off lifetime load from BookingDataAll |
+| `tunnel-start`, `tunnel-stop`, `tunnel-status` | **Temporary** remote access through ngrok until the router forwards 8443 ([docs/ngrok_temporary.md](../../docs/ngrok_temporary.md)) |
 | `web-start`, `web-stop`, `web-status` | Start (or restart), stop, or check the dashboard (section 7). Who can sign in is managed in Entra (app roles), not here. |
 
 | `restart` | Restart the containers |
