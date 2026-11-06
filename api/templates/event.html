@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set ev = e.event %}
+{% block title %}{{ ev.EventName or ev.EventId }}{% endblock %}
+{% block body %}
+<h1>{{ ev.EventName or 'Event' }} <span class="muted">· {{ ev.EventId }}</span></h1>
+<p class="sub">by <a href="/accounts/{{ e.account.AccountId }}">{{ e.account.AccountName or e.account.AccountId }}</a>
+  · first session {{ ev.FirstSessionDate | d(16) }} · last session {{ ev.LastSessionDate | d(16) }}</p>
+
+{% if e.latest %}
+<div class="card">
+  <div class="stats">
+    <div class="stat"><b><span class="pill {{ e.latest.Priority }}">{{ e.latest.Priority }}</span></b><span>priority on {{ e.latest.RunDate }}</span></div>
+    <div class="stat"><b>{{ e.latest.FraudScore | num(1) }}</b><span>fraud score</span></div>
+    <div class="stat"><b>{{ e.latest.ExposureScore | num }}</b><span>exposure score</span></div>
+    <div class="stat"><b>{{ e.latest.AmountAtRisk | money }}</b><span>held</span></div>
+  </div>
+  {% if e.latest.Reasons and e.latest.Reasons != '-' %}
+  <ul class="reasons">{% for r in e.latest.Reasons.split('; ') %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% else %}
+<div class="card muted">Not scored: only upcoming events are scored.</div>
+{% endif %}
+
+<div class="grid2">
+  <div class="card">
+    <h2>Timeline</h2>
+    <table>
+      {% for g in e.timeline %}
+      <tr><td>{{ g.label }}</td><td>{{ g.date | d(16) }}</td>
+        <td class="n {{ 'bad' if g.gap is not none and g.gap < 7 }}">{% if g.gap is not none %}+{{ g.gap | num }} days{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted">Created date source: {{ ev.EventCreatedSource or '-' }}{% if ev.EventCreatedSource == 'first_booking' %} (the latest it could be){% endif %}</p>
+  </div>
+  <div class="card">
+    <h2>Sales</h2>
+    <dl class="kv">
+      <dt>Paid bookings</dt><dd>{{ e.sales.PaidBookings | num }}</dd>
+      <dt>Sold</dt><dd>{{ e.sales.Gross | money }} for {{ e.sales.Tickets | num }} tickets</dd>
+      <dt>Average ticket</dt><dd>{{ e.sales.AvgTicket | money }}</dd>
+      <dt>First sale</dt><dd>{{ e.sales.FirstSale | d(16) }}</dd>
+      <dt>Sold in the first 24h</dt><dd>{{ e.sales.FirstDay | money }}</dd>
+      {% if e.lifetime %}
+      <dt>Refunded bookings</dt><dd>{{ e.lifetime.RefundedBookings | num }}</dd>
+      {% endif %}
+      <dt>IP countries</dt><dd>{% for c in e.ip_countries %}{{ c.Country }} {{ c.n }}{{ ', ' if not loop.last }}{% else %}-{% endfor %}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="grid2" style="margin-top: 14px">
+  <div class="card tablewrap">
+    <h2>Payment attempts <span class="muted">· Booking Transactions</span></h2>
+    {% if e.attempts %}
+    <table><thead><tr><th>Status</th><th>Gateway message</th><th>Treated as</th><th class="n">Attempts</th><th class="n">No phone</th></tr></thead><tbody>
+    {% for x in e.attempts %}
+    <tr><td>{{ x.Status }}</td><td>{{ x.Message }}</td><td class="{{ 'bad' if x.Class == 'decline' }}">{{ x.Class }}</td>
+      <td class="n">{{ x.n }}</td><td class="n">{{ x.NoPhone }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+    {% else %}<p class="muted">No Booking Transactions rows for this event.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Fraud score history</h2>
+    {{ chart(score_points, max_value=100) if score_points else '' }}
+    {% if score_points | length < 2 %}<p class="muted">The chart builds up as the daily report runs ({{ score_points | length }} so far).</p>{% endif %}
+  </div>
+</div>
+
+<div class="card tablewrap" style="margin-top: 14px">
+  <h2>Latest bookings <span class="muted">· {{ e.bookings | length }}{{ ' (latest 100)' if e.bookings | length == 100 }}</span></h2>
+  <table>
+    <thead><tr><th>Booked</th><th>Booking</th><th>Session</th><th class="n">Paid</th><th class="n">Tickets</th>
+      <th>Status</th><th>Type</th><th>IP country</th></tr></thead>
+    <tbody>
+    {% for b in e.bookings %}
+    <tr><td>{{ b.TransactionDate | d(16) }}</td>
+      <td><a href="/bookings/{{ b.BookingUrlId or b.BookingTransactionId }}">{{ b.BookingId or b.BookingTransactionId }}</a></td>
+      <td>{{ b.EventDate | d(16) }}</td><td class="n">{{ b.PaymentReceived | money }}</td>
+      <td class="n">{{ b.TicketQuantity | num }}</td><td>{{ b.Status or '' }}</td>
+      <td>{{ b.TransactionType or '' }} {{ b.PaymentType or '' }}</td><td>{{ b.IPCountry or '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

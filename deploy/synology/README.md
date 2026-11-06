@@ -6,7 +6,7 @@ Pi. It has one Docker image and two containers:
 | Container | Does | Starts |
 | --- | --- | --- |
 | `riskmanagement` | Worker. The nightly import jobs run inside it with `docker exec`. | always |
-| `riskmanagement-web` | Dashboard + JSON API | from build step 5 (`--profile web`) |
+| `riskmanagement-web` | Dashboard + JSON API on port 8085 | `rmctl.sh web-start` (section 7) |
 
 | On the NAS | In the containers |
 | --- | --- |
@@ -93,7 +93,7 @@ Each task is a Task Scheduler **User-defined script**:
 | RiskManagement risk report | daily 05:00 (after the imports) | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh report` |
 | RiskManagement update | weekly, e.g. Sunday 03:00, or Run by hand after a merge | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh update` |
 | RiskManagement status | **disabled**, Run by hand | `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh status` |
-| RiskManagement command | **disabled**, edit the line, then Run | e.g. `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh add-user henry@trybooking.co.uk admin` |
+| RiskManagement command | **disabled**, edit the line, then Run | e.g. `bash /volume1/docker/RiskManagement/deploy/synology/rmctl.sh report --no-email` |
 
 The Stripe (04:30) and backup (04:50) tasks follow the same pattern and are
 added in build steps 4 and 6.
@@ -131,10 +131,11 @@ added in build steps 4 and 6.
 | `check-transactions` | Booking Transactions import check only: files, match rate to S3 bookings, how each Gateway Message Description is classified, and the Status, CVV and card type values |
 | `ingest-s3 [options]` | Nightly S3 load. Options pass through, e.g. `ingest-s3 --dry-run` or `ingest-s3 --only RiskReport` |
 | `full-refresh` | One-off lifetime load from BookingDataAll |
-| `add-user EMAIL [viewer\|admin]`, `remove-user EMAIL`, `list-users` | Dashboard sign-ins |
+| `web-start`, `web-stop`, `web-status` | Start (or restart), stop, or check the dashboard (section 7). Who can sign in is managed in Entra (app roles), not here. |
+
 | `restart` | Restart the containers |
 | `env-export`, then `env-apply` | Change a setting: `env-export` copies `.env` to `setup/env-edit.txt` for Text Editor. `env-apply` puts it back (root-only), deletes the copy and restarts the worker. It refuses to change `RISK_ENCRYPTION_PASSPHRASE` once the warehouse exists. |
-| `run SCRIPT [args]` | Any `bin/` script, e.g. `run rm_admin.py create-token power-bi` |
+| `run SCRIPT [args]` | Any `bin/` script, e.g. `run rm_admin.py status` |
 
 Only one `rmctl` command runs at a time. A second one waits for the first
 (for up to 2 hours), so a by-hand full refresh can't collide with the nightly
@@ -150,6 +151,41 @@ container, in the browser.
 Run the **RiskManagement update** task. It pulls the latest code, rebuilds the
 image only when needed, and applies any warehouse upgrade. The weekly
 schedule does this automatically.
+
+## 7. Dashboard
+
+The dashboard shows the latest risk report as a list of accounts and events, plus:
+- an **account page**: scores and their reasons, timeline, trust (bank transfers, past events), balance and score history, events
+- an **event page**: scores, timeline, sales (average ticket, first 24 hours), payment attempts, bookings
+- a **booking page**: S3 rows, payment attempts, reconciliation
+- **search**: account, event or booking number, booking ID, gateway id, `VISA 1234`, email or phone (hashed, never logged), or a name
+- **Imports**
+
+Every page has a JSON twin under `/api/...`.
+
+**Sign-in is Microsoft only:**
+- a TryBooking tenant account, @trybooking.co.uk
+- the app role Risk Viewer or Risk Admin, assigned in Entra
+- MFA, enforced by Conditional Access and double-checked by the app
+
+There are no passwords or static tokens. The API takes a Microsoft access token for `api://<client id>/Risk.Read`.
+
+How it's protected:
+- It opens `risk.db` **read-only**.
+- No customer personal data appears anywhere.
+- Every request is written to **logs → web-audit-YYYYMM.log**. Search terms are stored only as a hash.
+
+**Set-up** is in [docs/entra_sso_setup.md](../../docs/entra_sso_setup.md):
+1. the Entra app registration, roles and Conditional Access (Microsoft 365 admin)
+2. DNS for `risk.trybooking.co.uk`
+3. a Let's Encrypt certificate in DSM (needs **port 80 only** forwarded to the NAS)
+4. the DSM reverse proxy from 443 to 8085
+5. the `WEB_*` settings in `.env`
+6. `rmctl.sh web-start`
+
+Keep 443 and 8085 LAN/VPN-only, and **never port-forward them**.
+
+`update` restarts the dashboard automatically when it's running, so it always runs the latest code.
 
 ## Legacy report
 
@@ -210,20 +246,12 @@ From then on, the nightly 04:10 task (below) loads only the current and
 previous month. That takes about a minute. Rerun `--full-refresh` only if
 TryBooking corrects old data.
 
-**7. Allow yourself on the dashboard** (used from step 5):
-```bash
-docker exec riskmanagement python3 bin/rm_admin.py add-user henry@trybooking.co.uk --role admin
-```
+**7. Dashboard access** is managed in Entra with app roles (docs/entra_sso_setup.md), not on the NAS.
 
 ### Admin commands (SSH)
 
 ```bash
 docker exec riskmanagement python3 bin/rm_admin.py status          # schema, size, rows, last imports
-docker exec riskmanagement python3 bin/rm_admin.py list-users
-docker exec riskmanagement python3 bin/rm_admin.py add-user someone@trybooking.co.uk
-docker exec riskmanagement python3 bin/rm_admin.py remove-user someone@trybooking.co.uk
-docker exec riskmanagement python3 bin/rm_admin.py create-token power-bi   # API token, shown once
-docker exec riskmanagement python3 bin/rm_admin.py revoke-token tok_…
 ```
 
 ### Scheduling with direct docker exec

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block body %}
+<div class="card" style="max-width: 480px; margin: 40px auto">
+  <h1>{{ 'Signed out' if signed_out else 'Sign in' }}</h1>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  {% if entra %}
+  <p><a class="button" href="/auth/start?next={{ next | urlencode }}">Sign in with Microsoft</a></p>
+  <p class="muted">Use your @{{ domains.split(',')[0] | trim }} account.
+    Multi-factor authentication is required, and you need the RiskManagement app role
+    (ask the Microsoft 365 admin).</p>
+  {% if signed_out %}<p class="muted">To end your Microsoft session too, sign out of Microsoft 365.</p>{% endif %}
+  {% else %}
+  <p class="err">Microsoft sign-in isn't set up on this server yet.</p>
+  <p class="muted">An admin sets <code>WEB_ENTRA_CLIENT_ID</code>, <code>WEB_ENTRA_CLIENT_SECRET</code> and
+    <code>WEB_BASE_URL</code> in <code>.env</code> (README section 7), then runs <code>rmctl.sh web-start</code>.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block body %}
+<h1>Search</h1>
+{% set kinds = {'guid': 'booking ID', 'email': 'email address (searched by its hash)', 'phone': 'phone number (searched by its hash)',
+               'card': 'card brand + last 4', 'number': 'account, event or booking number', 'gateway': 'gateway id',
+               'text': 'account or event name'} %}
+{% if q %}<p class="sub">Searched as {{ kinds.get(kind, kind) }}.</p>{% endif %}
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+{% if results %}
+<div class="card tablewrap">
+<table>
+  <thead><tr><th>Type</th><th>Result</th><th>Details</th></tr></thead>
+  <tbody>
+  {% for r in results %}
+  <tr><td>{{ r.type }}</td><td><a href="{{ r.url }}">{{ r.label }}</a></td><td class="muted">{{ r.detail }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif q %}
+<div class="card muted">Nothing found.</div>
+{% else %}
+<div class="card">
+  <p>Type in the box at the top. It recognises:</p>
+  <ul>
+    <li>an account or event number, a BookingTransactionId or BookingId</li>
+    <li>a booking ID (GUID) from the Booking Transactions export or the S3 BookingUrlId</li>
+    <li>a gateway id, e.g. <code>ch_…</code> or <code>pi_…</code></li>
+    <li>a card: <code>VISA 4242</code>, <code>Mastercard 1234</code>, <code>card 1234</code></li>
+    <li>an email address or phone number - hashed on the server and never stored or logged</li>
+    <li>part of an account or event name</li>
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

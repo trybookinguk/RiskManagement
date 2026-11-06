@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Booking{% endblock %}
+{% block body %}
+<h1>Booking <span class="muted">· {{ b.guid or ref }}</span></h1>
+<p class="sub">{% if b.event.EventId %}<a href="/events/{{ b.event.EventId }}">{{ b.event.EventName or b.event.EventId }}</a>
+  · <a href="/accounts/{{ b.event.AccountId }}">account {{ b.event.AccountId }}</a>{% else %}Not linked to an S3 event{% endif %}</p>
+
+<div class="card tablewrap">
+  <h2>S3 booking rows</h2>
+  {% if b.bookings %}
+  <table><thead><tr><th>Booked</th><th>Transaction</th><th>Booking</th><th>Session</th><th class="n">Paid</th><th class="n">Tickets</th>
+    <th>Status</th><th>Type</th><th>IP country</th><th>Gateway</th></tr></thead><tbody>
+  {% for r in b.bookings %}
+  <tr><td>{{ r.TransactionDate | d(16) }}</td><td>{{ r.BookingTransactionId }}</td><td>{{ r.BookingId }}</td>
+    <td>{{ r.EventDate | d(16) }}</td><td class="n">{{ r.PaymentReceived | money }}</td><td class="n">{{ r.TicketQuantity | num }}</td>
+    <td>{{ r.Status or '' }}</td><td>{{ r.TransactionType or '' }} {{ r.PaymentType or '' }}</td><td>{{ r.IPCountry or '' }}</td>
+    <td>{{ r.GatewayName or '' }}<br><span class="muted">{{ r.GatewayId or '' }}</span></td></tr>
+  {% endfor %}
+  </tbody></table>
+  {% else %}<p class="muted">Not in the S3 bookings yet.</p>{% endif %}
+</div>
+
+<div class="card tablewrap">
+  <h2>Payment attempts <span class="muted">· Booking Transactions</span></h2>
+  {% if b.attempts %}
+  <table><thead><tr><th>When</th><th>Type</th><th class="n">Amount</th><th>Status</th><th>Gateway message</th><th>Card</th>
+    <th>Email</th><th>Phone</th><th>Gateway id</th><th class="n">Versions</th></tr></thead><tbody>
+  {% for x in b.attempts %}
+  <tr><td>{{ x.TransactionDate | d(19) }}</td><td>{{ x.TransactionType or '' }}</td><td class="n">{{ x.Amount | money }}</td>
+    <td class="{{ 'bad' if x.IsDecline == 1 }}">{{ x.Status or '' }}</td><td>{{ x.GatewayMessageDescription or '' }}</td>
+    <td>{{ x.CardType or '' }} {{ x.CardLast4 or '' }}</td><td>{{ 'yes' if x.HasEmail else 'no' }}</td>
+    <td>{{ 'yes' if x.HasPhone else 'no' }}</td><td class="muted">{{ x.GatewayId or '' }}</td><td class="n">{{ x.Versions }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+  {% else %}<p class="muted">No Booking Transactions rows.</p>{% endif %}
+</div>
+
+{% if b.recon %}
+<div class="card tablewrap">
+  <h2>Gateway reconciliation</h2>
+  <table><thead><tr><th>When</th><th>Type</th><th class="n">Amount</th><th>Card</th><th>Message</th><th>Provider</th><th>Payout</th></tr></thead><tbody>
+  {% for r in b.recon %}
+  <tr><td>{{ r.TransactionDate | d(16) }}</td><td>{{ r.TxnType }}</td><td class="n">{{ r.Amount | money }}</td>
+    <td>{{ r.CardType or '' }} {{ r.CardLast4 or '' }}</td><td>{{ r.GatewayMessage or '' }}</td><td>{{ r.Provider or '' }}</td>
+    <td class="muted">{{ r.PayoutId or '' }} {{ r.ArrivalDate | d if r.ArrivalDate }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% endif %}
+{% endblock %}
