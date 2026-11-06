@@ -135,11 +135,27 @@ env_value() {
 
 web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$WEB" 2>/dev/null)" = "true" ]; }
 
-# The dashboard reads the code at start-up: restart it after an update so it runs the new code.
+web_exists() { docker inspect "$WEB" >/dev/null 2>&1; }
+
+# Seconds since the epoch: when the dashboard container started, and when the code last changed.
+web_started() {
+  local t; t=$(docker inspect -f '{{.State.StartedAt}}' "$WEB" 2>/dev/null | cut -c1-19 | tr T ' ')
+  [ -n "$t" ] && date -u -d "$t" +%s 2>/dev/null || echo 0
+}
+code_changed() { git -C "$REPO_DIR" log -1 --format=%ct 2>/dev/null || echo 0; }
+
+# The dashboard loads its Python code at start-up (templates are re-read, code isn't),
+# so after an update it must be recreated - whether or not it looked like it was running.
 web_refresh() {
-  if web_running; then
+  if web_exists; then
     step "Restarting the dashboard with the new code"
-    compose --profile web up -d --force-recreate "$WEB" || say "WARNING: could not restart the dashboard"
+    if compose --profile web up -d --force-recreate "$WEB"; then
+      say "Dashboard restarted (code $(git -C "$REPO_DIR" rev-parse --short HEAD))"
+    else
+      say "WARNING: could not restart the dashboard - run 'rmctl.sh web-start'"
+    fi
+  else
+    say "Dashboard not created yet - start it with 'rmctl.sh web-start' when needed"
   fi
 }
 
@@ -245,7 +261,11 @@ case "$CMD" in
     compose --profile web stop "$WEB"; rc=$? ;;
   web-status)
     if web_running; then
-      say "Dashboard container is running"
+      say "Dashboard container is running (code $(git -C "$REPO_DIR" rev-parse --short HEAD))"
+      started=$(web_started)
+      if [ "$started" -gt 0 ] && [ "$started" -lt "$(code_changed)" ]; then
+        say "WARNING: it started before the latest code update - run 'rmctl.sh web-start' to load the new code"
+      fi
       docker exec "$WEB" python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=5).read().decode())"
       rc=$?
       docker logs --tail 15 "$WEB"
