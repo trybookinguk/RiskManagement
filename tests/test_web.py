@@ -296,3 +296,13 @@ def test_cookie_secure_even_if_proxy_says_http(scenario, entra_env):
     client.entra = FakeEntra()
     r = sign_in(client)
     assert "Secure" in r.headers["set-cookie"]
+
+
+def test_bad_client_id_is_reported_not_sent_to_microsoft(scenario, entra_env, monkeypatch):
+    monkeypatch.setenv("WEB_ENTRA_CLIENT_ID", "e5d87b4c-2562-41f9-b90b-0f554db1a42")      # 11 in the last block
+    from api.app import create_app
+    client = TestClient(create_app(config.get_settings(), today=TODAY), base_url="https://risk.trybooking.co.uk")
+    page = html.unescape(client.get("/login").text)
+    assert "WEB_ENTRA_CLIENT_ID isn't a complete ID: it has 8-4-4-4-11 characters" in page
+    assert "Sign in with Microsoft</a>" not in page
+    assert client.get("/auth/start").status_code == 503

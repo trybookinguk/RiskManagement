@@ -63,7 +63,8 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
     settings = settings or config.get_settings()
     signer = auth.Signer()
     audit = auth.Audit(os.path.join(settings.data_dir, "logs"))
-    if auth.entra_configured(settings):
+    problems = auth.config_problems(settings)
+    if auth.entra_configured(settings) and not problems:
         entra = entra or auth.Entra(settings)
         api_tokens = api_tokens or auth.ApiTokens(settings)
     state = {"hasher": None}
@@ -71,7 +72,7 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
     app = FastAPI(title="RiskManagement", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
     templates.env.filters.update(money=_money, num=_num, d=_date)
-    templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None)
+    templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None, config_problems=problems)
 
     def connect():
         if not os.path.exists(settings.risk_db):
