@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "_macros.html" import portal %}
 {% set acc = a.account %}
 {% block title %}{{ acc.AccountName or acc.AccountId }}{% endblock %}
 {% block body %}
-<h1>{{ acc.AccountName or 'Account' }} <span class="muted">· {{ acc.AccountId }}</span></h1>
+<h1>{{ acc.AccountName or 'Account' }} <span class="muted">·</span> {{ portal(acc.AccountId) }}</h1>
 <p class="sub">{{ acc.AccountStatus or 'status unknown' }} · {{ acc.TierSystem or 'no tier' }}
   · created {{ acc.DateTimeCreated | d(16) }} · {{ acc.Industry or '' }} {{ ('/ ' ~ acc.SubIndustry) if acc.SubIndustry }}</p>
 

@@ -1,49 +1,75 @@
 {% extends "base.html" %}
+{% from "_macros.html" import portal %}
 {% set active = 'risk' %}
 {% block title %}Risk{% endblock %}
 {% block body %}
-<h1>Risk {{ 'accounts' if level == 'account' else 'events' }}</h1>
+{% set acct = level == 'account' %}
+{% set tips = {
+  'fraud': 'Fraud score, 0-100: how suspicious the activity looks. The fraud signals that fired (compressed timeline, overseas IPs, card declines, night-time account creation, imminent event, high ticket price, immediate sales, no phone numbers, duplicate event) add points; 25 points make 100. Then multiplied by account age (new accounts score higher) and trust (bank transfers, past events and their value).' + (' An account takes the score of its most suspicious upcoming event.' if acct else ''),
+  'exposure': ('Exposure score, 0-100: how much money is at stake, not evidence of fraud. Points for the full balance, sales for upcoming events, the largest single-event exposure, sales for events in the next 14 days, and a bank account change in the last 90 days.' if acct else 'Exposure score, 0-100: how much money is at stake for this event, not evidence of fraud. Points for the money held (sold, not yet paid out), plus more when the first session is within 14 days and at least £250 is held.'),
+  'risk': ('At risk: the £ TryBooking could lose if this account is fraudulent - the largest of its full balance, its sales for upcoming events, and the money held for its upcoming events.' if acct else 'Held: the £ sold for this event and not yet paid out to the organiser.'),
+} %}
+{% macro sorted(key, label) -%}
+  {%- set on = sort == key -%}
+  {%- set next_dir = 'asc' if on and dir == 'desc' else 'desc' -%}
+  <th class="n sort{{ ' on' if on }}" title="{{ tips[key] }}" aria-sort="{{ ('descending' if dir == 'desc' else 'ascending') if on else 'none' }}">
+    <a href="/?level={{ level }}&priority={{ priority }}&sort={{ key }}&dir={{ next_dir }}">{{ label }}<span class="arrow">{{ ('▼' if dir == 'desc' else '▲') if on else '↕' }}</span></a>
+    <span class="tip" aria-hidden="true">ⓘ</span>
+  </th>
+{%- endmacro %}
+<h1>Risk {{ 'accounts' if acct else 'events' }}</h1>
 {% if not run %}
 <div class="card">No risk report has run yet. Run <code>rmctl.sh report --no-email</code>, then reload.</div>
 {% else %}
 <p class="sub">Report of {{ run }}{% if previous %}, compared with {{ previous }}{% endif %}. Scores are recalculated
 each morning at 05:00.</p>
 
-<div class="card stats">
+<div class="summary">
   {% for p in ['P1', 'P2', 'P3', 'P4'] %}
   {% set n = counts.get(p, 0) %}{% set was = previous_counts.get(p, 0) %}
-  <div class="stat"><b><span class="pill {{ p }}">{{ p }}</span> {{ n }}</b>
-    <span>{% if previous %}{{ '%+d' % (n - was) }} since {{ previous }}{% else %}{{ 'accounts' if level == 'account' else 'events' }}{% endif %}</span></div>
+  <a class="card tile{{ ' on' if priority == p }}" href="/?level={{ level }}&priority={{ p }}&sort={{ sort }}&dir={{ dir }}">
+    <span class="pill {{ p }}">{{ p }}</span>
+    <b>{{ at_risk.get(p, 0) | money }}</b>
+    <span class="muted">{{ 'at risk' if acct else 'held' }} · {{ n }} {{ ('account' if acct else 'event') ~ ('' if n == 1 else 's') }}{% if previous %} ({{ '%+d' % (n - was) }} since {{ previous }}){% endif %}</span>
+  </a>
   {% endfor %}
+  {% set all_at_risk = at_risk.get('P1', 0) + at_risk.get('P2', 0) + at_risk.get('P3', 0) + at_risk.get('P4', 0) %}
+  <div class="card tile total">
+    <span class="pill P-">P1-P4</span>
+    <b>{{ all_at_risk | money }}</b>
+    {% set all_n = counts.get('P1', 0) + counts.get('P2', 0) + counts.get('P3', 0) + counts.get('P4', 0) %}
+    <span class="muted">{{ 'at risk' if acct else 'held' }} · {{ all_n }} {{ ('account' if acct else 'event') ~ ('' if all_n == 1 else 's') }}</span>
+  </div>
 </div>
 
 <div class="tabs">
-  <a href="/?level=account" class="{{ 'on' if level == 'account' }}">Accounts</a>
-  <a href="/?level=event" class="{{ 'on' if level == 'event' }}">Events</a>
+  <a href="/?level=account&sort={{ sort }}&dir={{ dir }}" class="{{ 'on' if acct }}">Accounts</a>
+  <a href="/?level=event&sort={{ sort }}&dir={{ dir }}" class="{{ 'on' if not acct }}">Events</a>
   <span class="muted" style="padding: 4px 6px">|</span>
-  <a href="/?level={{ level }}" class="{{ 'on' if not priority }}">All</a>
+  <a href="/?level={{ level }}&sort={{ sort }}&dir={{ dir }}" class="{{ 'on' if not priority }}">All</a>
   {% for p in ['P1', 'P2', 'P3', 'P4'] %}
-  <a href="/?level={{ level }}&priority={{ p }}" class="{{ 'on' if priority == p }}">{{ p }}</a>
+  <a href="/?level={{ level }}&priority={{ p }}&sort={{ sort }}&dir={{ dir }}" class="{{ 'on' if priority == p }}">{{ p }}</a>
   {% endfor %}
 </div>
 
 <div class="card tablewrap">
 <table>
   <thead><tr>
-    <th>Priority</th><th>{{ 'Account' if level == 'account' else 'Event' }}</th>
-    {% if level == 'event' %}<th>Account</th><th>First session</th>{% endif %}
-    <th class="n">Fraud</th><th class="n">Exposure</th><th class="n">{{ 'At risk' if level == 'account' else 'Held' }}</th>
-    <th>Why</th>
+    <th title="Review priority from the fraud and exposure bands (P1 most urgent). An account is never lower priority than its worst event.">Priority</th>
+    <th>{{ 'Account' if acct else 'Event' }}</th>
+    {% if not acct %}<th>Account</th><th>First session</th>{% endif %}
+    {{ sorted('fraud', 'Fraud') }}{{ sorted('exposure', 'Exposure') }}{{ sorted('risk', 'At risk' if acct else 'Held') }}
+    <th title="The signals and multipliers behind the fraud score: (+x) points, (xN) multipliers.">Why</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
   <tr>
     <td><span class="pill {{ r.Priority }}">{{ r.Priority }}</span></td>
-    {% if level == 'account' %}
-    <td><a href="/accounts/{{ r.Id }}">{{ r.Name or r.Id }}</a><br><span class="muted">{{ r.Id }}</span></td>
+    {% if acct %}
+    <td><a href="/accounts/{{ r.Id }}">{{ r.Name or r.Id }}</a><br>{{ portal(r.Id) }}</td>
     {% else %}
     <td><a href="/events/{{ r.Id }}">{{ r.Name or r.Id }}</a><br><span class="muted">{{ r.Id }}</span></td>
-    <td><a href="/accounts/{{ r.AccountId }}">{{ r.AccountName or r.AccountId }}</a></td>
+    <td><a href="/accounts/{{ r.AccountId }}">{{ r.AccountName or r.AccountId }}</a><br>{{ portal(r.AccountId) }}</td>
     <td>{{ r.FirstSessionDate | d }}</td>
     {% endif %}
     <td class="n">{{ r.FraudScore | num(1) }}</td>
@@ -56,10 +82,11 @@ each morning at 05:00.</p>
   {% endfor %}
   </tbody>
 </table>
+{% set qs = 'level=' ~ level ~ '&priority=' ~ priority ~ '&sort=' ~ sort ~ '&dir=' ~ dir %}
 <div class="pager muted">
   <span>{{ offset + 1 if rows else 0 }}–{{ offset + rows|length }} of {{ total }}</span>
-  {% if offset > 0 %}<a href="/?level={{ level }}&priority={{ priority }}&offset={{ [offset - limit, 0]|max }}">Previous</a>{% endif %}
-  {% if offset + rows|length < total %}<a href="/?level={{ level }}&priority={{ priority }}&offset={{ offset + limit }}">Next</a>{% endif %}
+  {% if offset > 0 %}<a href="/?{{ qs }}&offset={{ [offset - limit, 0]|max }}">Previous</a>{% endif %}
+  {% if offset + rows|length < total %}<a href="/?{{ qs }}&offset={{ offset + limit }}">Next</a>{% endif %}
 </div>
 </div>
 {% endif %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% from "_macros.html" import portal %}
+{% set active = 'funds' %}
+{% block title %}Fund requests{% endblock %}
+{% block body %}
+{% set pill = {'High': 'P1', 'Medium': 'P2', 'Low': 'P4'} %}
+<h1>Fund transfer requests</h1>
+<p class="sub">In the admin portal, select the whole fund transfer requests table (headers and rows), copy it,
+paste it below and press <b>Check requests</b>. Each request gets a risk check from the pasted figures and
+today's risk report. Nothing you paste is saved or logged, and names, comments, bank account names and email
+addresses aren't shown.</p>
+
+<form class="card paste" action="/fund-requests" method="post">
+  <label for="text"><b>Paste the table here</b></label>
+  <textarea id="text" name="text" rows="8" required spellcheck="false" autocomplete="off"
+    placeholder="Trust Level&#10;Event Organiser&#10;…&#10;Untrusted&#10;…&#10;6Nov26 10:19 PM&#9;18Jan26&#9;20Oct26&#9;22Nov26&#9;0.00&#9;162.20&#9;11&#9;1.01&#9;2.02&#9;4.55&#9;18967&#9;…"></textarea>
+  <div><button type="submit">Check requests</button></div>
+</form>
+
+{% if result %}
+{% for p in result.problems %}<div class="card err">{{ p }}</div>{% endfor %}
+{% if result.rows %}
+<div class="summary">
+  {% for lvl in ['High', 'Medium', 'Low'] %}
+  <div class="card tile"><span class="pill {{ pill[lvl] }}">{{ lvl }}</span>
+    <b>{{ result.summary[lvl].amount | money }}</b>
+    <span class="muted">{{ result.summary[lvl].n }} request{{ '' if result.summary[lvl].n == 1 else 's' }} · {{ cfg.advice[lvl] | lower }}</span></div>
+  {% endfor %}
+</div>
+
+<div class="card tablewrap">
+<table>
+  <thead><tr>
+    <th title="High: score 50+, hold and investigate. Medium: 25-49, check before paying. Low: under 25.">Risk</th>
+    <th class="n" title="0-100: the points of the checks that fired (+x), times trust from previous payments and past events (xN).">Score</th>
+    <th>Account</th>
+    <th class="n">Amount</th>
+    <th>Requested</th>
+    <th title="Date of the event the money is for. Paid out before the event = TryBooking carries the refund risk.">Event</th>
+    <th class="n" title="Previous payouts to this account (from the portal).">Prev. paid</th>
+    <th class="n" title="% foreign cards / % overseas bookings / % failed card payments (from the portal).">Foreign / overseas / failed %</th>
+    <th title="The account's priority in today's risk report.">Report</th>
+    <th>Why</th>
+  </tr></thead>
+  <tbody>
+  {% for r in result.rows %}
+  <tr>
+    <td class="nowrap"><span class="pill {{ pill[r.level] }}">{{ r.level }}</span><br><span class="muted small">{{ r.advice }}</span></td>
+    <td class="n">{{ r.score | num(1) }}</td>
+    <td>{% if r.account_id %}{% if r.account_name %}<a href="/accounts/{{ r.account_id }}">{{ r.account_name }}</a>{% else %}<span class="muted">not in the warehouse</span>{% endif %}<br>{{ portal(r.account_id) }}{% else %}<span class="err">no account ID</span>{% endif %}</td>
+    <td class="n">{{ r.amount | money2 }}</td>
+    <td class="nowrap">{{ r.requested.strftime('%d %b %y %H:%M') if r.requested else '-' }}</td>
+    <td class="nowrap">{{ r.event_date.strftime('%d %b %y') if r.event_date else '-' }}</td>
+    <td class="n">{{ r.previous_payments if r.previous_payments is not none else '-' }}</td>
+    <td class="n">{{ r.foreign_cards_pct | num(1) }} / {{ r.overseas_bookings_pct | num(1) }} / {{ r.failed_payments_pct | num(1) }}</td>
+    <td>{% if r.report %}<span class="pill {{ r.report.Priority }}">{{ r.report.Priority }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td class="why">{{ r.reasons | join('; ') or '-' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted small">Rules {{ result.version }}: account under 30 / 90 days old, first payout, paid before the event,
+large amount, event created within 14 days of the request, foreign cards, overseas bookings, failed card payments,
+P1-P3 in today's risk report; then trust from previous payments and past events. Sorted highest risk first.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

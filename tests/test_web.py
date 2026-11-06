@@ -327,3 +327,93 @@ def test_trybooking_styling_served_locally(viewer):
     assert viewer.get("/static/figtree-latin.woff2").status_code == 200
     csp = viewer.get("/").headers["Content-Security-Policy"]
     assert "font-src 'self' data:" in csp and "style-src 'self' 'unsafe-inline'" in csp
+
+
+# ------------------------------------------------- overview, imports, funds ---
+
+def test_risk_list_sorting_tooltips_and_portal_links(viewer):
+    by = {k: viewer.get("/api/risk", params={"sort": k}).json()["rows"] for k in ("fraud", "exposure", "risk")}
+    assert viewer.get("/api/risk").json()["sort"] == "fraud"                       # default
+    assert [r["FraudScore"] for r in by["fraud"]] == sorted((r["FraudScore"] for r in by["fraud"]), reverse=True)
+    assert [r["ExposureScore"] for r in by["exposure"]] == sorted((r["ExposureScore"] for r in by["exposure"]),
+                                                                  reverse=True)
+    assert [r["AmountAtRisk"] for r in by["risk"]] == sorted((r["AmountAtRisk"] for r in by["risk"]), reverse=True)
+    asc = [r["FraudScore"] for r in viewer.get("/api/risk?sort=fraud&dir=asc").json()["rows"]]
+    assert asc == sorted(asc) and len(asc) > 1
+    assert viewer.get("/api/risk?sort=name").status_code == 400
+    page = html.unescape(viewer.get("/").text)
+    assert 'title="Fraud score, 0-100' in page and 'title="Exposure score, 0-100' in page
+    assert 'title="At risk: the £ TryBooking could lose' in page
+    assert "sort=fraud&dir=asc" in page and "sort=exposure&dir=desc" in page          # fraud is on, descending
+    assert ("https://portal.trybooking.com/uk/admin/impersonate;redirectTo=%2Fdashboard;accountId=30;"
+            "userId=undefined") in page and 'rel="noopener noreferrer"' in page
+    assert "accountId=30;userId=undefined" in viewer.get("/accounts/30").text
+    assert "accountId=30;userId=undefined" in viewer.get("/?level=event").text
+    assert 'class="product"' not in page and ">Fund requests</a>" in page
+
+
+def test_at_risk_totals_per_priority(viewer):
+    rows = viewer.get("/api/risk?limit=500").json()
+    totals = viewer.get("/api/risk").json()["at_risk"]
+    for p in ("P1", "P2", "P3", "P4"):
+        want = sum(r["AmountAtRisk"] or 0 for r in rows["rows"] if r["Priority"] == p)
+        assert abs(totals.get(p, 0) - want) < 0.01
+    page = viewer.get("/").text
+    p1 = totals["P1"]
+    assert f"£{p1:,.0f}" in page and "at risk" in page and "P1-P4" in page
+    assert f"of {rows['total']}<" in page                     # pager still counts rows, not £
+
+
+def _failed_import(source="s3:Test"):
+    conn = db.connect(config.get_settings().risk_db)
+    rid = db.start_import(conn, source, "bad-file.csv")
+    db.finish_import(conn, rid, "failed", message="missing required columns")
+    conn.close()
+
+
+def test_clear_import_failures(site):
+    _failed_import()
+    sign_in(site, roles=["Risk.Admin"])
+    page = site.get("/imports").text
+    assert "bad-file.csv" in page and "/imports/clear-failures" in page and 'class="scroll"' in page
+    assert site.post("/imports/clear-failures", headers={"Origin": "https://evil.example"}).status_code == 403
+    r = site.post("/imports/clear-failures", headers={"Origin": "https://risk.trybooking.co.uk"},
+                  follow_redirects=False)
+    assert r.status_code == 303
+    page = site.get("/imports").text
+    assert "No failures since they were cleared by risk.analyst@trybooking.co.uk" in page
+    assert "bad-file.csv" in page                     # still listed under recent runs: nothing deleted
+    assert site.get("/api/imports").json()["failed"] == []
+    _failed_import("s3:Again")
+    assert [f["source"] for f in site.get("/api/imports").json()["failed"]] == ["s3:Again"]
+    sign_in(site)                                      # viewers can't clear
+    assert site.post("/imports/clear-failures").status_code == 403
+
+
+def test_fund_requests_page(viewer, tmp_path):
+    from test_fund_requests import HEADERS, HOT, QUIET, portal_row
+    paste = HEADERS + portal_row("30.00", QUIET.replace("18967", "40")) + portal_row("4,950.00", HOT)
+    assert "Paste the table here" in viewer.get("/fund-requests").text
+    r = viewer.post("/fund-requests", data={"text": paste})
+    page = html.unescape(r.text)
+    assert r.status_code == 200
+    assert "Sparkle Events" in page and "first payout" in page and "P1 in today's risk report (+30)" in page
+    assert page.index("accountId=30;") < page.index("accountId=40;")        # highest risk first
+    for private in ("Test Organiser", "Test Club", "@example.test", "Add a comment"):
+        assert private not in page, private                          # pasted personal data isn't shown
+    log = "".join(p.read_text() for p in (pathlib.Path(config.get_settings().data_dir) / "logs").glob("web-audit-*"))
+    assert "/fund-requests" in log and "example.test" not in log and "Test Club" not in log
+    assert viewer.post("/fund-requests", data={"text": paste},
+                       headers={"Origin": "https://evil.example"}).status_code == 403
+    assert "No requests found" in viewer.post("/fund-requests", data={"text": "nothing"}).text
+
+
+def test_fund_requests_api(site):
+    from test_fund_requests import HEADERS, HOT, portal_row
+    r = site.post("/api/fund-requests", json={"text": HEADERS + portal_row("4,950.00", HOT)},
+                  headers={"Authorization": f"Bearer {access_token()}"})
+    assert r.status_code == 200
+    row = r.json()["rows"][0]
+    assert row["account_id"] == 30 and row["level"] == "High" and row["report"]["Priority"] == "P1"
+    assert "example.test" not in r.text
+    assert site.post("/api/fund-requests", json={"text": "x"}).status_code == 401

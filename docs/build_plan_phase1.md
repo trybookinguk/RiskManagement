@@ -236,7 +236,9 @@ so it can never change the warehouse. It serves two things:
 | **Card** (brand + last 4, or fingerprint) | Every booking on that card, across events and organisers, with how many distinct purchasers (by hash) used it |
 | **Purchaser** (email or phone) | Every booking and card linked to that hash |
 | **Disputes** | Filter by status, source and account |
-| **Imports** | Last run per source, rows, failures, and files moved to `Failed/` |
+| **Overview** | Risk accounts / events for the latest report, sortable by Fraud (default), Exposure and At risk (click the column; hover it for its definition); £ at risk and count per priority P1–P4 plus the total. Account numbers open the account in the admin portal (impersonate). |
+| **Fund requests** | Paste the admin portal's fund transfer requests table; each request gets a High / Medium / Low risk check (`rm/fund_requests.py` CONFIG) from the pasted figures, today's risk report and the account's history. Nothing pasted is stored or logged; organiser, comment, bank account name and email are never shown. JSON: `POST /api/fund-requests {"text": ...}` |
+| **Imports** | Last run per source, rows, failures (admin **Clear** hides the current ones; kept in `data/web/state.json`, the import log is untouched), and recent runs in a scrolling panel |
 
 **JSON endpoints** (GET, paged with `limit` up to 500 and `offset`):
 - `/api/accounts`, `/api/accounts/{id}`

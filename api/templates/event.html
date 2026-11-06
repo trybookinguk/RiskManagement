@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "_macros.html" import portal %}
 {% set ev = e.event %}
 {% block title %}{{ ev.EventName or ev.EventId }}{% endblock %}
 {% block body %}
 <h1>{{ ev.EventName or 'Event' }} <span class="muted">· {{ ev.EventId }}</span></h1>
-<p class="sub">by <a href="/accounts/{{ e.account.AccountId }}">{{ e.account.AccountName or e.account.AccountId }}</a>
+<p class="sub">by <a href="/accounts/{{ e.account.AccountId }}">{{ e.account.AccountName or e.account.AccountId }}</a> ({{ portal(e.account.AccountId) }})
   · first session {{ ev.FirstSessionDate | d(16) }} · last session {{ ev.LastSessionDate | d(16) }}</p>
 
 {% if e.latest %}
