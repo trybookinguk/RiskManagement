@@ -94,10 +94,13 @@ def check_claims(claims: dict, settings) -> dict:
     domains = [d.strip().lower().lstrip("@") for d in settings.web_allowed_domains.split(",") if d.strip()]
     if not who or "@" not in who or who.rsplit("@", 1)[1] not in domains:
         raise AuthError(f"Only {', '.join('@' + d for d in domains)} accounts can sign in.")
-    roles = [ROLES[r] for r in _as_list(claims.get("roles")) if r in ROLES]
+    sent = [str(r) for r in _as_list(claims.get("roles"))]
+    roles = [ROLES[r] for r in sent if r in ROLES]
     if not roles:
-        raise AuthError("Your account hasn't been given access (app role Risk.Viewer or Risk.Admin). "
-                        "Ask the Microsoft 365 admin.")
+        seen = (", ".join(sent[:5]) if sent else "none")
+        raise AuthError(f"Your account ({who}) hasn't been given access (app role Risk.Viewer or Risk.Admin). "
+                        f"Roles in this sign-in: {seen}. Ask the Microsoft 365 admin to assign a role in "
+                        "Enterprise applications > RiskManagement Dashboard > Users and groups.")
     mfa = mfa_evidence(claims, settings)
     if mfa is None:
         raise AuthError("Multi-factor authentication is required, and this sign-in didn't use it. "
@@ -167,7 +170,10 @@ class Entra:
 
     def start(self) -> dict:
         domain = (self.settings.web_allowed_domains.split(",")[0] or "").strip() or None
+        # prompt=select_account: show which Microsoft account is used, instead of a silent
+        # sign-in with whatever account the browser already has.
         return self.app.initiate_auth_code_flow(scopes=[], redirect_uri=self.redirect_uri, domain_hint=domain,
+                                                prompt="select_account",
                                                 claims_challenge=claims_request(self.settings))
 
     def finish(self, flow: dict, params: dict) -> dict:
