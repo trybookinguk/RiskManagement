@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "_macros.html" import portal %}
 {% block title %}Booking{% endblock %}
 {% block body %}
 <h1>Booking <span class="muted">· {{ b.guid or ref }}</span></h1>
 <p class="sub">{% if b.event.EventId %}<a href="/events/{{ b.event.EventId }}">{{ b.event.EventName or b.event.EventId }}</a>
-  · <a href="/accounts/{{ b.event.AccountId }}">account {{ b.event.AccountId }}</a>{% else %}Not linked to an S3 event{% endif %}</p>
+  · <a href="/accounts/{{ b.event.AccountId }}">account</a> {{ portal(b.event.AccountId) }}{% else %}Not linked to an S3 event{% endif %}</p>
 
 <div class="card tablewrap">
   <h2>S3 booking rows</h2>

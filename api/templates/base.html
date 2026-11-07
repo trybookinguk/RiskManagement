@@ -11,10 +11,11 @@
 <body>
 <header>
   <div class="bar">
-    <a class="brand" href="/" aria-label="TryBooking Risk">{% include "_logo.svg" %}<span class="product">Risk</span></a>
+    <a class="brand" href="/" aria-label="TryBooking risk dashboard">{% include "_logo.svg" %}</a>
     {% if user %}
     <nav>
       <a href="/" class="{{ 'on' if active == 'risk' }}">Overview</a>
+      <a href="/fund-requests" class="{{ 'on' if active == 'funds' }}">Fund requests</a>
       {% if user.role == 'admin' %}<a href="/imports" class="{{ 'on' if active == 'imports' }}">Imports</a>{% endif %}
     </nav>
     <form class="search" action="/search" method="get" role="search">

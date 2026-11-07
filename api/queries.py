@@ -10,7 +10,6 @@ import re
 from rm.s3 import canonical_guid
 
 PRIORITIES = ["P1", "P2", "P3", "P4", "-"]
-_PORDER = "CASE Priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 WHEN 'P3' THEN 2 WHEN 'P4' THEN 3 ELSE 4 END"
 _REFUND = "LOWER(COALESCE(TransactionType,'')) LIKE '%refund%'"
 _PAID = ("COALESCE(PaymentReceived,0) > 0 AND LOWER(COALESCE(Status,'')) NOT LIKE '%refund%' "
          f"AND NOT {_REFUND}")
@@ -48,8 +47,22 @@ def priority_counts(conn, run, level):
         "SELECT Priority, COUNT(*) FROM risk_daily WHERE RunDate=? AND Level=? GROUP BY Priority", (run, level))}
 
 
-def risk_list(conn, level="account", run=None, priority=None, limit=50, offset=0):
-    """Scored accounts or events for a report run (default: the latest), most urgent first."""
+def priority_at_risk(conn, run, level):
+    """{priority: £ at risk (accounts) or £ held (events)} for a report run."""
+    if not run:
+        return {}
+    return {r[0]: r[1] or 0 for r in conn.execute(
+        "SELECT Priority, SUM(AmountAtRisk) FROM risk_daily WHERE RunDate=? AND Level=? GROUP BY Priority",
+        (run, level))}
+
+
+# column a risk list can be sorted by -> SQL
+SORTS = {"fraud": "r.FraudScore", "exposure": "r.ExposureScore", "risk": "r.AmountAtRisk"}
+
+
+def risk_list(conn, level="account", run=None, priority=None, limit=50, offset=0, sort="fraud", desc=True):
+    """Scored accounts or events for a report run (default: the latest), sorted by fraud
+    score (default), exposure score or £ at risk; ties broken by the other two."""
     run = run or (runs(conn, 1) or [None])[0]
     if not run:
         return {"run": None, "rows": [], "total": 0}
@@ -62,13 +75,15 @@ def risk_list(conn, level="account", run=None, priority=None, limit=50, offset=0
             "LEFT JOIN events e ON e.EventId = r.Id LEFT JOIN accounts a ON a.AccountId = r.AccountId")
     extra = "" if level == "account" else ", a.AccountName, e.FirstSessionDate"
     total = _one(conn, f"SELECT COUNT(*) FROM risk_daily r WHERE {where}", *args)
+    sort = sort if sort in SORTS else "fraud"
+    order = ", ".join([f"COALESCE({SORTS[sort]}, 0) {'DESC' if desc else 'ASC'}"]
+                      + [f"COALESCE({c}, 0) DESC" for k, c in SORTS.items() if k != sort] + ["r.Id"])
     rows = _rows(conn, f"""
         SELECT r.Id, r.AccountId, {name} AS Name{extra}, r.Priority, r.FraudScore, r.ExposureScore,
                r.AmountAtRisk, r.Reasons
         FROM risk_daily r {join} WHERE {where}
-        ORDER BY {_PORDER.replace('Priority', 'r.Priority')}, r.FraudScore DESC, r.AmountAtRisk DESC
-        LIMIT ? OFFSET ?""", *args, limit, offset)
-    return {"run": run, "rows": rows, "total": total}
+        ORDER BY {order} LIMIT ? OFFSET ?""", *args, limit, offset)
+    return {"run": run, "rows": rows, "total": total, "sort": sort, "dir": "desc" if desc else "asc"}
 
 
 def score_history(conn, level, id_, limit=90):
@@ -342,15 +357,17 @@ def search(conn, q, hasher=None, limit=50):
 
 # ------------------------------------------------------------------ imports ---
 
-def imports(conn, limit=60):
+def imports(conn, limit=60, failures_cleared=0):
+    """Last run per source, recent runs, and failures after ``failures_cleared`` (an import_log id:
+    the dashboard's "Clear" button hides the failures up to it, without touching the warehouse)."""
     last = _rows(conn, """SELECT l.source, l.ref, l.status, l.started_at, l.finished_at, l.rows_read, l.rows_written,
                                  l.message
                           FROM import_log l JOIN (SELECT source, MAX(id) AS id FROM import_log GROUP BY source) x
                             ON x.id = l.id ORDER BY l.source""")
     recent = _rows(conn, """SELECT source, ref, status, started_at, finished_at, rows_read, rows_written, message
                             FROM import_log ORDER BY id DESC LIMIT ?""", limit)
-    failed = _rows(conn, """SELECT source, ref, started_at, message FROM import_log
-                            WHERE status='failed' ORDER BY id DESC LIMIT 20""")
+    failed = _rows(conn, """SELECT id, source, ref, started_at, message FROM import_log
+                            WHERE status='failed' AND id > ? ORDER BY id DESC LIMIT 20""", failures_cleared or 0)
     return {"last": last, "recent": recent, "failed": failed}
 
 

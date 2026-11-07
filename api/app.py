@@ -8,18 +8,20 @@ warehouse. Pages are rendered on the server (Jinja2, no JavaScript); every page
 has a JSON twin under /api/... returning the same data.
 
 Pages                       JSON
-  /                risk       /api/risk?level=account|event&priority=P1&limit=&offset=
+  /                risk       /api/risk?level=account|event&priority=P1&sort=fraud|exposure|risk&dir=desc|asc
   /accounts/{id}              /api/accounts/{id}
   /events/{id}                /api/events/{id}
   /bookings/{ref}             /api/bookings/{ref}      (GUID, BookingTransactionId or BookingId)
   /search?q=                  /api/search?q=
   /imports         (admin)    /api/imports
+  /fund-requests              POST /api/fund-requests  {"text": "<table copied from the portal>"}
                               /api/health              (no sign-in)
 
 Sign-in is Microsoft only (api/auth.py): TryBooking tenant, @trybooking.co.uk,
 app role Risk.Viewer or Risk.Admin, MFA. Browsers get a session cookie; the
 JSON API takes an Entra access token for api://<client id>/Risk.Read.
 """
+import json
 import os
 import time
 import urllib.parse
@@ -32,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from rm import config, db
+from rm import config, db, fund_requests
 from . import auth, charts, queries
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +52,10 @@ def _money(v):
     return "-" if v is None else f"£{v:,.0f}"
 
 
+def _money2(v):
+    return "-" if v is None else f"£{v:,.2f}"
+
+
 def _num(v, digits=0):
     if v is None:
         return "-"
@@ -58,6 +64,16 @@ def _num(v, digits=0):
 
 def _date(v, n=10):
     return (str(v) or "")[:n] if v else "-"
+
+
+PORTAL_ACCOUNT = ("https://portal.trybooking.com/uk/admin/impersonate;redirectTo=%2Fdashboard;"
+                  "accountId={aid};userId=undefined")
+MAX_PASTE = 1_000_000     # bytes of pasted fund requests
+
+
+def portal_url(aid):
+    """The account in the TryBooking admin portal (impersonate, then its dashboard)."""
+    return PORTAL_ACCOUNT.format(aid=int(aid))
 
 
 def _inline_css() -> str:
@@ -88,9 +104,10 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
     app = FastAPI(title="RiskManagement", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
     app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
-    templates.env.filters.update(money=_money, num=_num, d=_date)
+    templates.env.filters.update(money=_money, money2=_money2, num=_num, d=_date)
     templates.env.globals.update(chart=lambda *a, **k: Markup(charts.line(*a, **k)), entra=entra is not None,
-                                 config_problems=problems, page_css=Markup(_inline_css()))
+                                 config_problems=problems, page_css=Markup(_inline_css()),
+                                 portal_url=portal_url)
 
     def connect():
         if not os.path.exists(settings.risk_db):
@@ -104,6 +121,23 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
             except Exception:
                 return None
         return state["hasher"]
+
+    state_file = os.path.join(settings.data_dir, "web", "state.json")
+
+    def web_state():
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def save_web_state(**changes):
+        data = dict(web_state(), **changes)
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        tmp = state_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, state_file)
 
     fixed_today = today
 
@@ -195,6 +229,16 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
             return JSONResponse({"error": "admin only"}, status_code=403)
         return HTMLResponse("<h1>Admins only</h1><p><a href='/'>Back</a></p>", status_code=403)
 
+    def same_origin(request):
+        """Refuse a form posted from another site (the session cookie is SameSite=Lax too)."""
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        if not origin:
+            return
+        o = urllib.parse.urlsplit(origin)
+        host = (request.headers.get("host") or "").lower()
+        if o.netloc.lower() != host:
+            raise HTTPException(403, "This form must be sent from the dashboard itself.")
+
     def _safe_next(nxt):
         return nxt if nxt and nxt.startswith("/") and not nxt.startswith("//") else "/"
 
@@ -263,24 +307,28 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
                                                                   "domains": settings.web_allowed_domains})
 
     # --------------------------------------------------------------- pages --
-    def _risk(conn, level, priority, limit, offset):
+    def _risk(conn, level, priority, limit, offset, sort="fraud", dir="desc"):
         if priority and priority not in queries.PRIORITIES:
             raise HTTPException(400, "priority must be P1-P4 or -")
+        if sort not in queries.SORTS:
+            raise HTTPException(400, "sort must be fraud, exposure or risk")
         limit = max(1, min(int(limit), 500))
-        data = queries.risk_list(conn, level, None, priority, limit, max(0, int(offset)))
+        data = queries.risk_list(conn, level, None, priority, limit, max(0, int(offset)), sort, dir != "asc")
         r = queries.runs(conn, 2)
         data["counts"] = queries.priority_counts(conn, data["run"], level)
+        data["at_risk"] = queries.priority_at_risk(conn, data["run"], level)
         data["previous"] = r[1] if len(r) > 1 else None
         data["previous_counts"] = queries.priority_counts(conn, data["previous"], level)
         return data
 
     @app.get("/", response_class=HTMLResponse)
-    def home(request: Request, level: str = "account", priority: str = "", limit: int = 50, offset: int = 0):
+    def home(request: Request, level: str = "account", priority: str = "", limit: int = 50, offset: int = 0,
+             sort: str = "fraud", dir: str = "desc"):
         conn = connect()
         try:
             require(request, conn)
             level = "event" if level == "event" else "account"
-            data = _risk(conn, level, priority or None, limit, offset)
+            data = _risk(conn, level, priority or None, limit, offset, sort, dir)
             return page(request, "home.html", conn, level=level, priority=priority, limit=limit, offset=offset,
                         priorities=queries.PRIORITIES, **data)
         finally:
@@ -342,7 +390,59 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
         conn = connect()
         try:
             require(request, conn, "admin")
-            return page(request, "imports.html", conn, i=queries.imports(conn))
+            st = web_state()
+            return page(request, "imports.html", conn, i=queries.imports(conn, failures_cleared=st.get(
+                "failures_cleared", 0)), cleared=st.get("failures_cleared_by"))
+        finally:
+            conn.close()
+
+    @app.post("/imports/clear-failures")
+    def clear_failures(request: Request):
+        """Hide the failures listed now (admin). Kept in data/web/state.json: the warehouse is
+        never written by the dashboard. New failures show up again."""
+        same_origin(request)
+        conn = connect()
+        try:
+            u = require(request, conn, "admin")
+            last = conn.execute("SELECT MAX(id) FROM import_log WHERE status='failed'").fetchone()[0] or 0
+        finally:
+            conn.close()
+        save_web_state(failures_cleared=last, failures_cleared_by={
+            "who": u["who"], "at": datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M")})
+        return RedirectResponse("/imports", status_code=303)
+
+    # ------------------------------------------------------ fund requests --
+    async def _pasted(request):
+        body = await request.body()
+        if len(body) > MAX_PASTE:
+            raise HTTPException(413, "That's too much to paste at once (1 MB). Paste fewer rows.")
+        if request.url.path.startswith("/api/"):
+            try:
+                return str(json.loads(body or b"{}").get("text") or "")
+            except (ValueError, AttributeError):
+                raise HTTPException(400, 'send JSON {"text": "<table copied from the portal>"}') from None
+        return (urllib.parse.parse_qs(body.decode("utf-8", "replace")).get("text") or [""])[0]
+
+    @app.get("/fund-requests", response_class=HTMLResponse)
+    def fund_requests_page(request: Request):
+        conn = connect()
+        try:
+            require(request, conn)
+            return page(request, "fund_requests.html", conn, result=None, cfg=fund_requests.CONFIG)
+        finally:
+            conn.close()
+
+    @app.post("/fund-requests", response_class=HTMLResponse)
+    async def fund_requests_check(request: Request):
+        """Risk check of fund transfer requests pasted from the portal. Nothing pasted is kept:
+        the audit log records the request, not its contents."""
+        same_origin(request)
+        conn = connect()
+        try:
+            require(request, conn)
+            text = await _pasted(request)
+            result = fund_requests.assess(conn, text, today())
+            return page(request, "fund_requests.html", conn, result=result, cfg=fund_requests.CONFIG)
         finally:
             conn.close()
 
@@ -367,9 +467,10 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
                                        **queries.health(c)})
 
     @app.get("/api/risk")
-    def api_risk(request: Request, level: str = "account", priority: str = "", limit: int = 50, offset: int = 0):
+    def api_risk(request: Request, level: str = "account", priority: str = "", limit: int = 50, offset: int = 0,
+                 sort: str = "fraud", dir: str = "desc"):
         level = "event" if level == "event" else "account"
-        return api(request, lambda c: _risk(c, level, priority or None, limit, offset))
+        return api(request, lambda c: _risk(c, level, priority or None, limit, offset, sort, dir))
 
     def _found(x, what):
         if not x:
@@ -403,7 +504,13 @@ def create_app(settings=None, entra=None, today=None, api_tokens=None) -> FastAP
 
     @app.get("/api/imports")
     def api_imports(request: Request):
-        return api(request, queries.imports, "admin")
+        return api(request, lambda c: queries.imports(c, failures_cleared=web_state().get("failures_cleared", 0)),
+                   "admin")
+
+    @app.post("/api/fund-requests")
+    async def api_fund_requests(request: Request):
+        text = await _pasted(request)
+        return api(request, lambda c: fund_requests.assess(c, text, today()))
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):

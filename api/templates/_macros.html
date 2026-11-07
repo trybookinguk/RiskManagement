@@ -1,0 +1,3 @@
+{% macro portal(aid) -%}
+<a class="portal" href="{{ portal_url(aid) }}" target="_blank" rel="noopener noreferrer" title="Open account {{ aid }} in the TryBooking admin portal (impersonate)">{{ aid }}<span aria-hidden="true"> ↗</span></a>
+{%- endmacro %}
